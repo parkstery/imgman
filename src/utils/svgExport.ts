@@ -1,6 +1,14 @@
 import { CanvasConfig, CanvasElement, Layer, ShapeElement, ImageElement } from '../types';
 import { getShapePath, getPolylinePath, getArcPath } from './shapeGenerators';
-import { getRotationOriginAttr } from './elementGeometry';
+import {
+  resolveVectorizeOptions,
+  VectorizeError,
+  vectorizeImageElement,
+  type VectorizeOptions,
+} from './rasterVectorizer';
+import { getExportVisibleImageElements } from './svgExportImages';
+import { sanitizeSvgXmlId } from './vectorizedImageMarkup';
+import { serializeSafeSvgColor } from './safeSvgColor';
 
 /** Douglas-Peucker 알고리즘으로 포인트 단순화 (허용 오차 px) */
 export function simplifyPoints(points: { x: number; y: number }[], tolerance = 1.5): { x: number; y: number }[] {
@@ -50,20 +58,29 @@ export function simplifyPoints(points: { x: number; y: number }[], tolerance = 1
 }
 
 /** 폴리라인 포인트를 SVG path로 변환 (단순화 포함) */
-export function polylinePath(points: { x: number; y: number }[], simplify = true): string {
+export function polylinePath(
+  points: { x: number; y: number }[],
+  simplify = true,
+  tolerance = 1.2
+): string {
   if (points.length === 0) return '';
-  const src = simplify && points.length > 10 ? simplifyPoints(points, 1.2) : points;
+  const src =
+    simplify && tolerance > 0 && points.length > 10 ? simplifyPoints(points, tolerance) : points;
   return src.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
 }
 
 /** 브러시 스트로크 path 단순화 (필수 포인트만 남김) */
-export function brushPath(points: { x: number; y: number }[]): string {
+export function brushPath(
+  points: { x: number; y: number }[],
+  sampleDistance = 2,
+  simplifyTolerance = 1.0
+): string {
   if (points.length < 2) return '';
-  // 2px 간격으로 다운샘플링 후 단순화
   const downsampled: { x: number; y: number }[] = [points[0]];
+  const dist = Math.max(0.5, sampleDistance);
   for (let i = 1; i < points.length - 1; i++) {
     const last = downsampled[downsampled.length - 1];
-    if (Math.hypot(points[i].x - last.x, points[i].y - last.y) >= 2) {
+    if (Math.hypot(points[i].x - last.x, points[i].y - last.y) >= dist) {
       downsampled.push(points[i]);
     }
   }
@@ -73,8 +90,8 @@ export function brushPath(points: { x: number; y: number }[]): string {
     return `M ${downsampled[0].x.toFixed(1)} ${downsampled[0].y.toFixed(1)} L ${downsampled[downsampled.length - 1].x.toFixed(1)} ${downsampled[downsampled.length - 1].y.toFixed(1)}`;
   }
 
-  // 단순화된 포인트로 부드러운 스플라인
-  const simple = simplifyPoints(downsampled, 1.0);
+  const simple =
+    simplifyTolerance > 0 ? simplifyPoints(downsampled, simplifyTolerance) : downsampled;
   if (simple.length < 3) {
     return `M ${simple[0].x.toFixed(1)} ${simple[0].y.toFixed(1)} L ${simple[simple.length - 1].x.toFixed(1)} ${simple[simple.length - 1].y.toFixed(1)}`;
   }
@@ -119,10 +136,10 @@ function getImageExtension(src: string): string {
 /** XML 이스케이프 */
 function encodeXML(str: string): string {
   return (str || '')
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-    .replace(/"/g, '"')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 }
 
@@ -143,23 +160,44 @@ function defsKey(type: string, params: Record<string, string | number>): string 
   return type + ':' + Object.entries(params).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join('|');
 }
 
+export type RasterHandling = 'preserve' | 'vectorize' | 'skip';
+
+export interface SVGExportReport {
+  vectorizedImageCount: number;
+  rasterImageCount: number;
+  pathCount: number;
+  warnings: string[];
+}
+
 export interface SVGExportOptions {
-  /** 이미지 처리 모드: 'embed'=data URL 임베딩, 'link'=원본 URL 유지, 'skip'=이미지 제외 */
+  /** @deprecated use rasterHandling + imageEmbed */
   imageMode?: 'embed' | 'link' | 'skip';
-  /** 좌표 소수점 자릿수 (기본 1) */
+  rasterHandling?: RasterHandling;
+  /** preserve 모드: http(s) URL만 link, data URL은 항상 href에 포함 */
+  imageEmbed?: 'link' | 'embed';
+  vectorize?: Partial<VectorizeOptions>;
   precision?: number;
-  /** 패스 단순화 허용 오차 (px, 기본 1.2) */
   simplifyTolerance?: number;
-  /** 브러시 스트로크 다운샘플 간격 (px, 기본 2) */
   brushSampleDistance?: number;
-  /** 투명 배경 */
   transparentBackground?: boolean;
-  /** 메타데이터 포함 여부 */
   includeMetadata?: boolean;
 }
 
-const DEFAULT_OPTIONS: Required<SVGExportOptions> = {
-  imageMode: 'link',
+type NormalizedSvgExportOptions = {
+  rasterHandling: RasterHandling;
+  imageEmbed: 'link' | 'embed';
+  vectorize: VectorizeOptions;
+  precision: number;
+  simplifyTolerance: number;
+  brushSampleDistance: number;
+  transparentBackground: boolean;
+  includeMetadata: boolean;
+};
+
+const DEFAULT_OPTIONS: NormalizedSvgExportOptions = {
+  rasterHandling: 'preserve',
+  imageEmbed: 'link',
+  vectorize: resolveVectorizeOptions(),
   precision: 1,
   simplifyTolerance: 1.2,
   brushSampleDistance: 2,
@@ -167,22 +205,67 @@ const DEFAULT_OPTIONS: Required<SVGExportOptions> = {
   includeMetadata: false,
 };
 
+export function normalizeSvgExportOptions(options: SVGExportOptions = {}): NormalizedSvgExportOptions {
+  let rasterHandling = options.rasterHandling;
+  let imageEmbed = options.imageEmbed;
+
+  if (options.imageMode) {
+    if (options.imageMode === 'skip') rasterHandling = 'skip';
+    else {
+      rasterHandling = rasterHandling ?? 'preserve';
+      imageEmbed = options.imageMode === 'embed' ? 'embed' : 'link';
+    }
+  }
+
+  return {
+    rasterHandling: rasterHandling ?? DEFAULT_OPTIONS.rasterHandling,
+    imageEmbed: imageEmbed ?? DEFAULT_OPTIONS.imageEmbed,
+    vectorize: resolveVectorizeOptions(options.vectorize),
+    precision: options.precision ?? DEFAULT_OPTIONS.precision,
+    simplifyTolerance: options.simplifyTolerance ?? DEFAULT_OPTIONS.simplifyTolerance,
+    brushSampleDistance: options.brushSampleDistance ?? DEFAULT_OPTIONS.brushSampleDistance,
+    transparentBackground: options.transparentBackground ?? DEFAULT_OPTIONS.transparentBackground,
+    includeMetadata: options.includeMetadata ?? DEFAULT_OPTIONS.includeMetadata,
+  };
+}
+
 /** 타입 가드: ShapeElement인지 확인 */
 function isShapeElement(el: CanvasElement): el is ShapeElement {
   return el.type === 'shape';
 }
 
-/** 메인 SVG 생성 함수 */
-export function generateSVGString(
+function collectImageClipDefs(
+  elements: CanvasElement[],
+  defsMap: Map<string, string>,
+  fmt: (n: number) => string
+): void {
+  elements.forEach((el) => {
+    if (el.type !== 'image' || !el.cornerRadius || el.cornerRadius <= 0) return;
+    const safeId = sanitizeSvgXmlId(el.id);
+    const key = `clip-img:${safeId}`;
+    if (defsMap.has(key)) return;
+    const r = fmt(el.cornerRadius);
+    defsMap.set(
+      key,
+      `
+  <clipPath id="clip-img-${safeId}">
+    <rect x="0" y="0" width="${fmt(el.width)}" height="${fmt(el.height)}" rx="${r}" ry="${r}" />
+  </clipPath>`
+    );
+  });
+}
+
+function assembleSvgString(
   layers: Layer[],
   elements: CanvasElement[],
   config: CanvasConfig,
-  options: SVGExportOptions = {}
+  opts: NormalizedSvgExportOptions,
+  vectorizedMarkup: Map<string, string>,
+  report?: SVGExportReport
 ): string {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
   const { width, height, backgroundColor } = config;
   const precision = Math.max(0, Math.min(3, opts.precision));
-  const fmt = (n: number) => precision === 0 ? Math.round(n).toString() : n.toFixed(precision);
+  const fmt = (n: number) => (precision === 0 ? Math.round(n).toString() : n.toFixed(precision));
 
   // --- 1. defs 수집 (중복 제거) ---
   const defsMap = new Map<string, string>();
@@ -273,6 +356,7 @@ export function generateSVGString(
     }
   });
 
+  collectImageClipDefs(elements, defsMap, fmt);
   const defs = Array.from(defsMap.values()).join('');
 
   // --- 2. 콘텐츠 생성 ---
@@ -315,7 +399,11 @@ export function generateSVGString(
 
           let pathD = '';
           if (el.shapeType === 'polyline' && el.points && el.points.length >= 2) {
-            pathD = polylinePath(el.points, true);
+            pathD = polylinePath(
+              el.points,
+              opts.simplifyTolerance > 0,
+              opts.simplifyTolerance
+            );
           } else if (el.shapeType === 'arc' && el.points && el.points.length >= 2 && el.arcRadius != null) {
             pathD = getArcPath(el.points[0], el.points[1], el.arcRadius, !!el.arcLarge, !!el.arcSweep);
           } else {
@@ -342,7 +430,7 @@ export function generateSVGString(
 
         case 'brush': {
           if (!el.points || el.points.length < 2) return;
-          const d = brushPath(el.points);
+          const d = brushPath(el.points, opts.brushSampleDistance, opts.simplifyTolerance);
           const strokeColor = normalizeColor(el.color);
           const strokeWidth = fmt(el.strokeWidth);
           const opacity = el.isHighlighter ? fmt(el.opacity * 0.4) : fmt(el.opacity);
@@ -384,40 +472,58 @@ export function generateSVGString(
         }
 
         case 'image': {
-          if (opts.imageMode === 'skip') return;
-
           const imgEl = el as ImageElement;
-          const href = imgEl.src;
 
-          // data URL이면 임베딩 여부 결정
-          let finalHref = href;
-          if (isDataURL(href)) {
-            if (opts.imageMode === 'link') {
-              // 외부 링크 모드면 data URL을 그대로 두되 경고용 주석 추가
-              finalHref = href;
+          if (opts.rasterHandling === 'skip') return;
+
+          if (opts.rasterHandling === 'vectorize') {
+            const markup = vectorizedMarkup.get(imgEl.id);
+            if (!markup) {
+              throw new VectorizeError(`Missing vectorized markup for image "${imgEl.name}"`);
             }
-            // embed 모드면 그대로 사용 (base64 포함)
+            parts.push(markup);
+            break;
           }
+
+          const finalHref = imgEl.src;
 
           const f = imgEl.filters;
-          const hasFilters = f && (
-            f.brightness !== 100 || f.contrast !== 100 || f.saturation !== 100 ||
-            f.grayscale > 0 || f.invert > 0 || f.blur > 0
-          );
+          const hasFilters =
+            f &&
+            (f.brightness !== 100 ||
+              f.contrast !== 100 ||
+              f.saturation !== 100 ||
+              f.grayscale > 0 ||
+              f.invert > 0 ||
+              f.blur > 0);
           const filterStyle = hasFilters
-            ? `filter="brightness(${fmt(f.brightness / 100)}) contrast(${fmt(f.contrast / 100)}) saturate(${fmt(f.saturation / 100)}) blur(${fmt(f.blur)}px) grayscale(${fmt(f.grayscale / 100)}) invert(${fmt(f.invert / 100)})"`
+            ? `filter:brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturation}%) blur(${f.blur}px) grayscale(${f.grayscale}%) invert(${f.invert}%)`
             : '';
 
-          const cornerRadius = imgEl.cornerRadius ? fmt(imgEl.cornerRadius) : '0';
-          const borderWidth = imgEl.borderWidth ? fmt(imgEl.borderWidth) : '0';
-          const borderColor = imgEl.borderColor ? normalizeColor(imgEl.borderColor) : 'none';
+          const safeId = sanitizeSvgXmlId(imgEl.id);
+          const clipAttr =
+            imgEl.cornerRadius && imgEl.cornerRadius > 0
+              ? ` clip-path="url(#clip-img-${safeId})"`
+              : '';
+          const opacityAttrImg = el.opacity !== 1 ? ` opacity="${fmt(el.opacity)}"` : '';
+          const outerRot =
+            rot !== 0 ? ` transform="${flipAttr}rotate(${fmt(rot)} ${fmt(cx)} ${fmt(cy)})"` : flipAttr
+              ? ` transform="${flipAttr.trim()}"`
+              : '';
 
-          const clipPathId = (cornerRadius !== '0' || borderWidth !== '0') ? `clip-${imgEl.id}` : '';
-          if (clipPathId) {
-            // clipPath는 defs에 추가 (단순화 위해 인라인으로 처리)
+          parts.push(`<g${outerRot}>`);
+          parts.push(`<g transform="translate(${fmt(el.x)} ${fmt(el.y)})"${clipAttr}${opacityAttrImg}>`);
+          parts.push(
+            `<image href="${encodeXML(finalHref)}" x="0" y="0" width="${fmt(el.width)}" height="${fmt(el.height)}" preserveAspectRatio="none"${filterStyle ? ` style="${filterStyle}"` : ''}${filterAttr} />`
+          );
+          if (imgEl.borderWidth && imgEl.borderWidth > 0) {
+            const rx = imgEl.cornerRadius ? fmt(imgEl.cornerRadius) : '0';
+            parts.push(
+              `<rect x="0" y="0" width="${fmt(el.width)}" height="${fmt(el.height)}" rx="${rx}" ry="${rx}" fill="none" stroke="${serializeSafeSvgColor(imgEl.borderColor || '#000000')}" stroke-width="${fmt(imgEl.borderWidth)}" />`
+            );
           }
-
-          parts.push(`<image href="${encodeXML(finalHref)}" x="${fmt(el.x)}" y="${fmt(el.y)}" width="${fmt(el.width)}" height="${fmt(el.height)}" preserveAspectRatio="none"${filterStyle ? ` style="${filterStyle}"` : ''} opacity="${fmt(el.opacity)}" transform="${flipAttr}${rot !== 0 ? ` rotate(${fmt(rot)} ${fmt(cx)} ${fmt(cy)})` : ''}"${filterAttr} />`);
+          parts.push('</g></g>');
+          if (report) report.rasterImageCount += 1;
           break;
         }
       }
@@ -438,6 +544,62 @@ ${defs}
   </defs>
 ${parts.join('\n')}
 </svg>`;
+}
+
+/** 동기 SVG (preserve / skip). rasterExport·autoCrop용. */
+export function generateSVGString(
+  layers: Layer[],
+  elements: CanvasElement[],
+  config: CanvasConfig,
+  options: SVGExportOptions = {}
+): string {
+  const opts = normalizeSvgExportOptions(options);
+  if (opts.rasterHandling === 'vectorize') {
+    throw new Error('vectorize mode requires generateSVGStringAsync');
+  }
+  return assembleSvgString(layers, elements, config, opts, new Map());
+}
+
+export async function generateSVGStringAsync(
+  layers: Layer[],
+  elements: CanvasElement[],
+  config: CanvasConfig,
+  options: SVGExportOptions = {}
+): Promise<{ svg: string; report: SVGExportReport }> {
+  const opts = normalizeSvgExportOptions(options);
+  const report: SVGExportReport = {
+    vectorizedImageCount: 0,
+    rasterImageCount: 0,
+    pathCount: 0,
+    warnings: [],
+  };
+
+  const vectorizedMarkup = new Map<string, string>();
+  const precision = Math.max(0, Math.min(3, opts.precision));
+  const fmt = (n: number) => (precision === 0 ? Math.round(n).toString() : n.toFixed(precision));
+
+  if (opts.rasterHandling === 'vectorize') {
+    const images = getExportVisibleImageElements(layers, elements);
+    for (const imgEl of images) {
+      try {
+        const { markup, pathCount } = await vectorizeImageElement(imgEl, opts.vectorize, fmt);
+        vectorizedMarkup.set(imgEl.id, markup);
+        report.vectorizedImageCount += 1;
+        report.pathCount += pathCount;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new VectorizeError(`Failed to vectorize image "${imgEl.name}": ${msg}`);
+      }
+    }
+  }
+
+  const svg = assembleSvgString(layers, elements, config, opts, vectorizedMarkup, report);
+  if (opts.rasterHandling === 'vectorize') {
+    if (/<image\b/i.test(svg) || /data:image/i.test(svg)) {
+      throw new VectorizeError('Vectorize export still contains raster image markup');
+    }
+  }
+  return { svg, report };
 }
 
 /** SVG 파일 다운로드 */

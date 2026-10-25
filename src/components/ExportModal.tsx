@@ -4,7 +4,16 @@ import {
   CanvasElement,
   CanvasConfig,
 } from '../types';
-import { generateSVGString, downloadSVGFile, SVGExportOptions, analyzeSVGSize } from '../utils/svgExport';
+import {
+  generateSVGString,
+  generateSVGStringAsync,
+  downloadSVGFile,
+  SVGExportOptions,
+  analyzeSVGSize,
+  type RasterHandling,
+} from '../utils/svgExport';
+import { VectorizeError } from '../utils/rasterVectorizer';
+import { getExportVisibleImageElements } from '../utils/svgExportImages';
 import { exportToRaster, downloadDataUrl } from '../utils/rasterExport';
 import { X, Download, FileCode, Image as ImageIcon, Sparkles, Settings, AlertTriangle, CheckCheck } from 'lucide-react';
 
@@ -56,17 +65,21 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [filename, setFilename] = useState<string>(() => makeExportFilename());
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
 
-  // SVG Export Options
+  const [svgAnalysisBusy, setSvgAnalysisBusy] = useState(false);
+
   const [svgOptions, setSvgOptions] = useState<SVGExportOptions>({
-    imageMode: 'link',
+    rasterHandling: 'preserve',
     precision: 1,
     simplifyTolerance: 1.2,
     brushSampleDistance: 2,
-    transparentBackground: false,
     includeMetadata: false,
   });
   const [svgAnalysis, setSvgAnalysis] = useState<{ total: number; byType: Record<string, number> } | null>(null);
+
+  const imageElementCount = getExportVisibleImageElements(layers, elements).length;
 
   // Reset format + timestamped filename whenever the export dialog opens
   useEffect(() => {
@@ -74,8 +87,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       setFormat('png');
       setQualityPct(80);
       setFilename(makeExportFilename());
+      setExportError(null);
+      setExportStatus(null);
+      setSvgAnalysis(null);
+      setSvgAnalysisBusy(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setExportError(null);
+    setExportStatus(null);
+    setSvgAnalysis(null);
+  }, [isOpen, format, transparent, svgOptions, layers, elements, config]);
 
   // Generate a live preview when modal opens or settings change (debounced —
   // the preview renders at the real export scale so its byte size doubles as
@@ -113,14 +137,24 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   const handleDownload = async () => {
     setIsGenerating(true);
+    setExportError(null);
+    setExportStatus(null);
     try {
       const baseName = filename.trim() || makeExportFilename();
       if (format === 'svg') {
-        const svgStr = generateSVGString(layers, elements, config, {
-          ...svgOptions,
-          transparentBackground: transparent,
-        });
-        downloadSVGFile(svgStr, `${baseName}.svg`);
+        const svgOpts = { ...svgOptions, transparentBackground: transparent };
+        if (svgOpts.rasterHandling === 'vectorize') {
+          setExportStatus('이미지 벡터화 중…');
+          const { svg, report } = await generateSVGStringAsync(layers, elements, config, svgOpts);
+          downloadSVGFile(svg, `${baseName}.svg`);
+          setExportStatus(
+            `벡터화 완료: 이미지 ${report.vectorizedImageCount}장, path ${report.pathCount}개` +
+              (report.warnings.length ? ` · 경고 ${report.warnings.length}건` : '')
+          );
+        } else {
+          const svgStr = generateSVGString(layers, elements, config, svgOpts);
+          downloadSVGFile(svgStr, `${baseName}.svg`);
+        }
       } else {
         const dataUrl = await exportToRaster(
           layers,
@@ -136,8 +170,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       onClose();
     } catch (err) {
       console.error('Export error:', err);
+      const msg =
+        err instanceof VectorizeError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : '보내기에 실패했습니다.';
+      setExportError(msg);
     } finally {
       setIsGenerating(false);
+      setExportStatus(null);
     }
   };
 
@@ -312,7 +354,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <p className="flex items-start space-x-1.5">
                   <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
                   <span>
-                    SVG는 무한 확대해도 깨지지 않는 순수 벡터 그래픽으로, 일러스트레이터, 피그마, PPT 등에서 자유롭게 편집 가능합니다.
+                    {imageElementCount === 0
+                      ? '도형·텍스트·브러시만 있어 순수 벡터 SVG로보낼 수 있습니다.'
+                      : svgOptions.rasterHandling === 'vectorize'
+                        ? '삽입 이미지를 path로 변환해 순수 벡터 SVG를 만듭니다(실패 시 다운로드가 중단됩니다).'
+                        : svgOptions.rasterHandling === 'skip'
+                          ? '삽입 이미지는 제외되고 나머지만 벡터로보냅니다.'
+                          : `원본 유지: 삽입 이미지 ${imageElementCount}개를 <image href>로 넣습니다(data URL은 파일에 포함, http(s)는 링크).`}
                   </span>
                 </p>
               )}
@@ -330,15 +378,20 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
                   <div className="grid grid-cols-2 gap-2">
                     {/* Image Mode */}
-                    <div className="space-y-1">
+                    <div className="space-y-1 col-span-2">
                       <label className="text-[11px] text-stone-400 block">이미지 처리</label>
                       <select
-                        value={svgOptions.imageMode}
-                        onChange={(e) => setSvgOptions({ ...svgOptions, imageMode: e.target.value as SVGExportOptions['imageMode'] })}
+                        value={svgOptions.rasterHandling ?? 'preserve'}
+                        onChange={(e) =>
+                          setSvgOptions({
+                            ...svgOptions,
+                            rasterHandling: e.target.value as RasterHandling,
+                          })
+                        }
                         className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-stone-100 text-xs focus:border-amber-500"
                       >
-                        <option value="link">원본 링크 유지 (권장, 용량 최소)</option>
-                        <option value="embed">Base64 임베딩 (단일 파일, 용량 큼)</option>
+                        <option value="preserve">원본 유지 (혼합 SVG)</option>
+                        <option value="vectorize">벡터화 (순수 벡터)</option>
                         <option value="skip">이미지 제외</option>
                       </select>
                     </div>
@@ -402,31 +455,35 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       </select>
                     </div>
 
-                    {/* Transparent Background for SVG */}
-                    <div className="space-y-1">
-                      <label className="flex items-center space-x-1.5 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={svgOptions.transparentBackground}
-                          onChange={(e) => setSvgOptions({ ...svgOptions, transparentBackground: e.target.checked })}
-                          className="rounded border-stone-700 text-amber-500 focus:ring-0"
-                        />
-                        <span className="text-[11px] text-stone-300">배경 투명 처리</span>
-                      </label>
-                    </div>
                   </div>
 
                   {/* SVG Size Analysis */}
                   <button
                     type="button"
-                    onClick={() => {
-                      const svgStr = generateSVGString(layers, elements, config, svgOptions);
-                      setSvgAnalysis(analyzeSVGSize(svgStr));
+                    disabled={svgAnalysisBusy}
+                    onClick={async () => {
+                      if (svgAnalysisBusy) return;
+                      setSvgAnalysisBusy(true);
+                      setExportError(null);
+                      try {
+                        const opts = { ...svgOptions, transparentBackground: transparent };
+                        if (opts.rasterHandling === 'vectorize') {
+                          const { svg } = await generateSVGStringAsync(layers, elements, config, opts);
+                          setSvgAnalysis(analyzeSVGSize(svg));
+                        } else {
+                          const svgStr = generateSVGString(layers, elements, config, opts);
+                          setSvgAnalysis(analyzeSVGSize(svgStr));
+                        }
+                      } catch (e) {
+                        setExportError(e instanceof Error ? e.message : '분석 실패');
+                      } finally {
+                        setSvgAnalysisBusy(false);
+                      }
                     }}
-                    className="w-full px-3 py-1.5 rounded border border-stone-700 bg-stone-800 text-stone-300 hover:bg-stone-700 text-xs flex items-center justify-center gap-1.5 transition-colors"
+                    className="w-full px-3 py-1.5 rounded border border-stone-700 bg-stone-800 text-stone-300 hover:bg-stone-700 text-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
                   >
                     <CheckCheck className="w-3.5 h-3.5" />
-                    <span>SVG 용량 분석 실행</span>
+                    <span>{svgAnalysisBusy ? '분석 중…' : 'SVG 용량 분석 실행'}</span>
                   </button>
 
                   {svgAnalysis && (
@@ -489,6 +546,18 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
         </div>
 
+        {(exportError || exportStatus) && (
+          <div
+            className={`text-xs px-3 py-2 rounded border ${
+              exportError
+                ? 'border-red-800/80 bg-red-950/40 text-red-200'
+                : 'border-amber-800/60 bg-amber-950/30 text-amber-200'
+            }`}
+          >
+            {exportError ?? exportStatus}
+          </div>
+        )}
+
         {/* Modal Footer */}
         <div className="flex items-center justify-end space-x-2 pt-4 border-t border-stone-800">
           <button
@@ -504,7 +573,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             className="flex items-center space-x-1.5 px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-md transition-all disabled:opacity-50"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>{isGenerating ? '생성 중...' : '파일 다운로드'}</span>
+            <span>
+              {isGenerating
+                ? svgOptions.rasterHandling === 'vectorize' && format === 'svg'
+                  ? '벡터화 중...'
+                  : '생성 중...'
+                : '파일 다운로드'}
+            </span>
           </button>
         </div>
       </div>

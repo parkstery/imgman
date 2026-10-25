@@ -337,7 +337,7 @@ export async function getCanvasPixels(
 ): Promise<ImageData | null> {
   let url = '';
   try {
-    const svg = generateSVGString(layers, elements, config, true);
+    const svg = generateSVGString(layers, elements, config, { transparentBackground: true });
     const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
     url = URL.createObjectURL(blob);
     const img = await loadImageElement(url);

@@ -4,9 +4,9 @@ import {
   CanvasElement,
   CanvasConfig,
 } from '../types';
-import { generateSVGString, downloadSVGFile } from '../utils/svgExport';
+import { generateSVGString, downloadSVGFile, SVGExportOptions, analyzeSVGSize } from '../utils/svgExport';
 import { exportToRaster, downloadDataUrl } from '../utils/rasterExport';
-import { X, Download, FileCode, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { X, Download, FileCode, Image as ImageIcon, Sparkles, Settings, AlertTriangle, CheckCheck } from 'lucide-react';
 
 /** Export basename: im-YYMMDD-HHMMSS (e.g. im-261005-064530) */
 function makeExportFilename(date = new Date()): string {
@@ -57,6 +57,17 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
+  // SVG Export Options
+  const [svgOptions, setSvgOptions] = useState<SVGExportOptions>({
+    imageMode: 'link',
+    precision: 1,
+    simplifyTolerance: 1.2,
+    brushSampleDistance: 2,
+    transparentBackground: false,
+    includeMetadata: false,
+  });
+  const [svgAnalysis, setSvgAnalysis] = useState<{ total: number; byType: Record<string, number> } | null>(null);
+
   // Reset format + timestamped filename whenever the export dialog opens
   useEffect(() => {
     if (isOpen) {
@@ -105,7 +116,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     try {
       const baseName = filename.trim() || makeExportFilename();
       if (format === 'svg') {
-        const svgStr = generateSVGString(layers, elements, config, transparent);
+        const svgStr = generateSVGString(layers, elements, config, {
+          ...svgOptions,
+          transparentBackground: transparent,
+        });
         downloadSVGFile(svgStr, `${baseName}.svg`);
       } else {
         const dataUrl = await exportToRaster(
@@ -301,6 +315,138 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     SVG는 무한 확대해도 깨지지 않는 순수 벡터 그래픽으로, 일러스트레이터, 피그마, PPT 등에서 자유롭게 편집 가능합니다.
                   </span>
                 </p>
+              )}
+
+              {/* SVG Export Options (Advanced) */}
+              {format === 'svg' && (
+                <div className="space-y-3 pt-2 border-t border-stone-800">
+                  <div className="flex items-center justify-between">
+                    <span className="text-stone-300 font-medium flex items-center space-x-1.5">
+                      <Settings className="w-3.5 h-3.5 text-amber-400" />
+                      <span>SVG 고급 옵션</span>
+                    </span>
+                    <span className="text-[10px] text-stone-500">경량화된 표준 SVG 출력</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Image Mode */}
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-stone-400 block">이미지 처리</label>
+                      <select
+                        value={svgOptions.imageMode}
+                        onChange={(e) => setSvgOptions({ ...svgOptions, imageMode: e.target.value as SVGExportOptions['imageMode'] })}
+                        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-stone-100 text-xs focus:border-amber-500"
+                      >
+                        <option value="link">원본 링크 유지 (권장, 용량 최소)</option>
+                        <option value="embed">Base64 임베딩 (단일 파일, 용량 큼)</option>
+                        <option value="skip">이미지 제외</option>
+                      </select>
+                    </div>
+
+                    {/* Precision */}
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-stone-400 block">좌표 정밀도</label>
+                      <select
+                        value={svgOptions.precision}
+                        onChange={(e) => setSvgOptions({ ...svgOptions, precision: Number(e.target.value) })}
+                        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-stone-100 text-xs focus:border-amber-500"
+                      >
+                        <option value={0}>정수 (최소 용량)</option>
+                        <option value={1}>소수점 1자리 (기본)</option>
+                        <option value={2}>소수점 2자리</option>
+                        <option value={3}>소수점 3자리</option>
+                      </select>
+                    </div>
+
+                    {/* Simplify Tolerance */}
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-stone-400 block">패스 단순화 허용오차</label>
+                      <select
+                        value={svgOptions.simplifyTolerance}
+                        onChange={(e) => setSvgOptions({ ...svgOptions, simplifyTolerance: Number(e.target.value) })}
+                        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-stone-100 text-xs focus:border-amber-500"
+                      >
+                        <option value={0.5}>0.5px (최대 단순화)</option>
+                        <option value={1.0}>1.0px</option>
+                        <option value={1.2}>1.2px (기본)</option>
+                        <option value={2.0}>2.0px</option>
+                        <option value={0}>비활성화</option>
+                      </select>
+                    </div>
+
+                    {/* Brush Sample Distance */}
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-stone-400 block">브러시 샘플 간격</label>
+                      <select
+                        value={svgOptions.brushSampleDistance}
+                        onChange={(e) => setSvgOptions({ ...svgOptions, brushSampleDistance: Number(e.target.value) })}
+                        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-stone-100 text-xs focus:border-amber-500"
+                      >
+                        <option value={1}>1px (고정밀)</option>
+                        <option value={2}>2px (기본)</option>
+                        <option value={3}>3px</option>
+                        <option value={5}>5px (최대 압축)</option>
+                      </select>
+                    </div>
+
+                    {/* Include Metadata */}
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-stone-400 block">메타데이터</label>
+                      <select
+                        value={svgOptions.includeMetadata ? 'true' : 'false'}
+                        onChange={(e) => setSvgOptions({ ...svgOptions, includeMetadata: e.target.value === 'true' })}
+                        className="w-full bg-stone-800 border border-stone-700 rounded px-2 py-1 text-stone-100 text-xs focus:border-amber-500"
+                      >
+                        <option value="false">제외 (기본)</option>
+                        <option value="true">포함</option>
+                      </select>
+                    </div>
+
+                    {/* Transparent Background for SVG */}
+                    <div className="space-y-1">
+                      <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={svgOptions.transparentBackground}
+                          onChange={(e) => setSvgOptions({ ...svgOptions, transparentBackground: e.target.checked })}
+                          className="rounded border-stone-700 text-amber-500 focus:ring-0"
+                        />
+                        <span className="text-[11px] text-stone-300">배경 투명 처리</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* SVG Size Analysis */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const svgStr = generateSVGString(layers, elements, config, svgOptions);
+                      setSvgAnalysis(analyzeSVGSize(svgStr));
+                    }}
+                    className="w-full px-3 py-1.5 rounded border border-stone-700 bg-stone-800 text-stone-300 hover:bg-stone-700 text-xs flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>SVG 용량 분석 실행</span>
+                  </button>
+
+                  {svgAnalysis && (
+                    <div className="p-2 bg-stone-800/60 border border-stone-700 rounded text-[10px] text-stone-400 font-mono">
+                      <div className="flex items-center space-x-1.5 mb-1">
+                        <AlertTriangle className="w-3 h-3 text-amber-400" />
+                        <span className="font-semibold text-amber-300">예상 SVG 크기:</span>
+                        <span className="text-amber-400">{formatBytes(svgAnalysis.total)}</span>
+                      </div>
+                      <div className="text-right text-stone-500">
+                        주요 태그:{' '}
+                        {Object.entries(svgAnalysis.byType)
+                          .sort(([, a], [, b]) => (b as number) - (a as number))
+                          .slice(0, 5)
+                          .map(([k, v]) => `<${k}>:${formatBytes(v as number)}`)
+                          .join(', ')}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
               {format === 'png' && (
                 <p>무손실 압축 포맷으로 투명 배경을 지원하며 그래픽, 로고, 아이콘에 적합합니다. 사진 성격의 캔버스라면 JPEG/WebP가 훨씬 작습니다.</p>

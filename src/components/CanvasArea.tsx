@@ -17,7 +17,7 @@ import {
 } from '../types';
 import { getShapePath, getPolylinePath, finalizePolylineGeometry, getArcPath, computeArcFromChordAndBend, finalizeArcGeometry } from '../utils/shapeGenerators';
 import { getRotationOriginAttr } from '../utils/elementGeometry';
-import { generateBrushSmoothPath } from '../utils/svgExport';
+import { brushPath } from '../utils/svgExport';
 import { sampleColorFromCanvas } from '../utils/rasterExport';
 import { getToolCursor } from '../utils/cursorUtils';
 import {
@@ -147,7 +147,7 @@ const RadialPreviewItem: React.FC<{ el: CanvasElement }> = ({ el }) => {
 
       {el.type === 'brush' && (
         <path
-          d={generateBrushSmoothPath(el.points)}
+          d={brushPath(el.points)}
           fill="none"
           stroke={el.color}
           strokeWidth={el.strokeWidth}
@@ -2534,7 +2534,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                         <g>
                           {/* Invisible wide hitbox for brush */}
                           <path
-                            d={generateBrushSmoothPath(el.points)}
+                            d={brushPath(el.points)}
                             fill="none"
                             stroke="transparent"
                             strokeWidth={Math.max(el.strokeWidth, 20)}
@@ -2542,7 +2542,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                             className={currentTool === 'select' ? 'cursor-pointer' : ''}
                           />
                           <path
-                            d={generateBrushSmoothPath(el.points)}
+                            d={brushPath(el.points)}
                             fill="none"
                             stroke={el.color}
                             strokeWidth={el.strokeWidth}
@@ -2809,7 +2809,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         {/* Active Brush Stroke Live Drawing Preview */}
           {isDrawing && currentPoints.length > 1 && (
             <path
-              d={generateBrushSmoothPath(currentPoints)}
+              d={brushPath(currentPoints)}
               fill="none"
               stroke={primaryColor}
               strokeWidth={

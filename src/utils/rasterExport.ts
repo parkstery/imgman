@@ -10,7 +10,7 @@ export async function exportToRaster(
   transparentBackground = false,
   quality = 0.92
 ): Promise<string> {
-  const svgString = generateSVGString(layers, elements, config, transparentBackground);
+  const svgString = generateSVGString(layers, elements, config, { transparentBackground });
   const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
 
@@ -73,7 +73,7 @@ export async function exportRegionToRaster(
   const regX = Math.round(region.x);
   const regY = Math.round(region.y);
 
-  const svgString = generateSVGString(layers, elements, config, transparentBackground);
+  const svgString = generateSVGString(layers, elements, config, { transparentBackground });
   const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
 
@@ -158,7 +158,7 @@ export async function sampleColorFromCanvas(
   x: number,
   y: number
 ): Promise<string> {
-  const svgString = generateSVGString(layers, elements, config, false);
+  const svgString = generateSVGString(layers, elements, config, { transparentBackground: false });
   const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
 

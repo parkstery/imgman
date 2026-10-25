@@ -2197,6 +2197,13 @@ export default function App() {
         }
       }
 
+      // Escape: same as clicking the Select tool button
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleSelectTool('select');
+        return;
+      }
+
       // Undo / Redo
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();

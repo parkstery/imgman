@@ -20,7 +20,14 @@ import { getRotationOriginAttr } from '../utils/elementGeometry';
 import { generateBrushSmoothPath } from '../utils/svgExport';
 import { sampleColorFromCanvas } from '../utils/rasterExport';
 import { getToolCursor } from '../utils/cursorUtils';
-import { Crop, Scissors, Copy } from 'lucide-react';
+import {
+  autoCropCanvas,
+  autoCropImageElement,
+  padRect,
+  trimFailureMessage,
+  CropRect,
+} from '../utils/autoCrop';
+import { Crop, Scissors, Copy, Wand2, Minus, Plus } from 'lucide-react';
 
 /** Default text tool: compact 12px label box */
 const DEFAULT_TEXT_FONT_SIZE = 12;
@@ -492,6 +499,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   // depend on that identity, or the crop rectangle resets to the full image.
   const onCropBoxChangeRef = useRef(onCropBoxChange);
   onCropBoxChangeRef.current = onCropBoxChange;
+
+  // ── Auto Crop (Trim) ─────────────────────────────────────────────────────
+  // 여백(px)은 크롭 박스와 같은 좌표계(이미지 로컬 / 캔버스)로 적용된다.
+  const [autoCropPadding, setAutoCropPadding] = useState(10);
+  const [isAutoCropping, setIsAutoCropping] = useState(false);
+  const [autoCropNotice, setAutoCropNotice] = useState<string | null>(null);
+  const cropAnimRef = useRef<number | null>(null);
 
   // Inline text editing
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -1837,6 +1851,141 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     }
     setCropBox(null);
   }, [cropBox, onCropCanvas, onUpdateConfig, elements, onUpdateElement]);
+
+  /* ---------------------------------------------------------------------- */
+  /* Auto Crop (Trim)                                                       */
+  /* ---------------------------------------------------------------------- */
+
+  // 크롭 박스를 목표 사각형까지 부드럽게 이동 (ease-out cubic)
+  const animateRectTo = useCallback(
+    (from: CropRect, to: CropRect, onUpdate: (rect: CropRect) => void, duration = 220) => {
+      if (cropAnimRef.current !== null) cancelAnimationFrame(cropAnimRef.current);
+      const start = performance.now();
+      const step = (now: number) => {
+        const t = Math.min(1, (now - start) / duration);
+        const e = 1 - Math.pow(1 - t, 3);
+        if (t >= 1) {
+          onUpdate(to);
+          cropAnimRef.current = null;
+          return;
+        }
+        onUpdate({
+          x: from.x + (to.x - from.x) * e,
+          y: from.y + (to.y - from.y) * e,
+          w: from.w + (to.w - from.w) * e,
+          h: from.h + (to.h - from.h) * e,
+        });
+        cropAnimRef.current = requestAnimationFrame(step);
+      };
+      cropAnimRef.current = requestAnimationFrame(step);
+    },
+    []
+  );
+
+  useEffect(
+    () => () => {
+      if (cropAnimRef.current !== null) cancelAnimationFrame(cropAnimRef.current);
+    },
+    []
+  );
+
+  // 알림 자동 해제
+  useEffect(() => {
+    if (!autoCropNotice) return;
+    const t = setTimeout(() => setAutoCropNotice(null), 3600);
+    return () => clearTimeout(t);
+  }, [autoCropNotice]);
+
+  // 이미지 요소의 실제 픽셀에서 여백을 찾아 크롭 박스를 맞춘다.
+  const handleAutoCropImage = useCallback(async () => {
+    if (!croppingImage || isAutoCropping) return;
+    setIsAutoCropping(true);
+    setAutoCropNotice(null);
+    try {
+      const result = await autoCropImageElement(croppingImage, {
+        tolerance: 12,
+        alphaThreshold: 8,
+        mode: 'auto',
+      });
+
+      if (!result.ok || !result.rect) {
+        // 실패 시 기존 크롭 범위를 그대로 유지한다.
+        setAutoCropNotice(trimFailureMessage(result.reason));
+        return;
+      }
+
+      const target = padRect(
+        result.rect,
+        autoCropPadding,
+        { w: croppingImage.width, h: croppingImage.height }
+      );
+
+      if (target.w < 4 || target.h < 4) {
+        setAutoCropNotice('자동 자르기: 결과 영역이 너무 작아 기존 범위를 유지합니다.');
+        return;
+      }
+
+      animateRectTo(imgCropBox, target, setImgCropBox);
+      setAutoCropNotice(
+        result.fullFrame
+          ? '자동 자르기: 잘라낼 여백이 없습니다.'
+          : `자동 자르기: ${Math.round(target.w)} × ${Math.round(target.h)} px`
+      );
+    } catch {
+      setAutoCropNotice(trimFailureMessage('error'));
+    } finally {
+      setIsAutoCropping(false);
+    }
+  }, [croppingImage, isAutoCropping, autoCropPadding, imgCropBox, animateRectTo]);
+
+  // 캔버스 전체(합성 결과)에서 여백을 찾아 크롭 박스를 맞춘다.
+  const handleAutoCropCanvas = useCallback(async () => {
+    if (isAutoCropping) return;
+    setIsAutoCropping(true);
+    setAutoCropNotice(null);
+    try {
+      const result = await autoCropCanvas(layers, elements, config, {
+        tolerance: 12,
+        alphaThreshold: 8,
+      });
+
+      if (!result.ok || !result.rect) {
+        setAutoCropNotice(trimFailureMessage(result.reason));
+        return;
+      }
+
+      const target = padRect(result.rect, autoCropPadding, {
+        w: config.width,
+        h: config.height,
+      });
+
+      if (target.w < 20 || target.h < 20) {
+        setAutoCropNotice('자동 자르기: 결과 영역이 너무 작아 기존 범위를 유지합니다.');
+        return;
+      }
+
+      // 크롭 박스가 없으면 캔버스 전체에서 줄어드는 애니메이션으로 시작
+      const from = cropBox ?? { x: 0, y: 0, w: config.width, h: config.height };
+      animateRectTo(from, target, setCropBox);
+      setAutoCropNotice(
+        result.fullFrame
+          ? '자동 자르기: 잘라낼 여백이 없습니다.'
+          : `자동 자르기: ${Math.round(target.w)} × ${Math.round(target.h)} px`
+      );
+    } catch {
+      setAutoCropNotice(trimFailureMessage('error'));
+    } finally {
+      setIsAutoCropping(false);
+    }
+  }, [
+    isAutoCropping,
+    layers,
+    elements,
+    config,
+    autoCropPadding,
+    cropBox,
+    animateRectTo,
+  ]);
 
   // Keyboard: finish / cancel continuous polyline
   useEffect(() => {
@@ -3341,6 +3490,44 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                 </button>
               </div>
 
+              {/* Auto Crop (Trim) — 실제 픽셀에서 여백을 찾아 크롭 박스를 맞춤 */}
+              <div className="flex items-center space-x-1 pr-1.5 border-r border-stone-700">
+                <button
+                  type="button"
+                  onClick={handleAutoCropImage}
+                  disabled={isAutoCropping}
+                  className="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 disabled:opacity-40 disabled:cursor-wait text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 text-[11px] font-semibold rounded transition-colors flex items-center space-x-1"
+                  title="투명/단색 여백을 자동 감지해 크롭 영역을 맞춥니다"
+                >
+                  <Wand2 className={`w-3 h-3 ${isAutoCropping ? 'animate-pulse' : ''}`} />
+                  <span>자동 자르기</span>
+                </button>
+                <div
+                  className="flex items-center bg-stone-800 border border-stone-700 rounded overflow-hidden"
+                  title="자동 자르기 결과에 남길 여백(px)"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setAutoCropPadding((p) => Math.max(0, p - 2))}
+                    className="px-1 py-1 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-colors"
+                    aria-label="여백 줄이기"
+                  >
+                    <Minus className="w-2.5 h-2.5" />
+                  </button>
+                  <span className="w-7 text-center font-mono text-[10px] text-amber-400 font-semibold select-none">
+                    {autoCropPadding}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAutoCropPadding((p) => Math.min(200, p + 2))}
+                    className="px-1 py-1 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-colors"
+                    aria-label="여백 늘리기"
+                  >
+                    <Plus className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              </div>
+
               {/* Cut & Copy image portion */}
               <div className="flex items-center space-x-1 pr-1.5 border-r border-stone-700">
                 <button
@@ -3406,6 +3593,95 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           </div>
         )}
       </div>
+
+      {/* Canvas Crop – action bar (자동 자르기 / 적용 / 취소) */}
+      {currentTool === 'crop' && !croppingImageId && (
+        <div className="absolute top-9 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1.5 pointer-events-none">
+          <div className="pointer-events-auto bg-stone-900/95 backdrop-blur border border-amber-500/50 rounded-lg px-3 py-1.5 text-[11px] text-stone-200 flex items-center gap-2.5 shadow-xl whitespace-nowrap">
+            <span className="font-semibold text-amber-300">자르기</span>
+
+            {cropBox ? (
+              <span className="font-mono text-[10px] text-stone-400">
+                {Math.round(cropBox.w)} × {Math.round(cropBox.h)} px
+              </span>
+            ) : (
+              <span className="text-stone-500">영역을 드래그하거나 자동 자르기를 사용하세요</span>
+            )}
+
+            <span className="text-stone-700">|</span>
+
+            <button
+              type="button"
+              onClick={handleAutoCropCanvas}
+              disabled={isAutoCropping}
+              className="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 disabled:opacity-40 disabled:cursor-wait text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 text-[11px] font-semibold rounded transition-colors flex items-center gap-1"
+              title="객체가 있는 실제 영역을 감지해 크롭 박스를 맞춥니다"
+            >
+              <Wand2 className={`w-3 h-3 ${isAutoCropping ? 'animate-pulse' : ''}`} />
+              자동 자르기
+            </button>
+
+            <div
+              className="flex items-center bg-stone-800 border border-stone-700 rounded overflow-hidden"
+              title="자동 자르기 결과에 남길 여백(px)"
+            >
+              <button
+                type="button"
+                onClick={() => setAutoCropPadding((p) => Math.max(0, p - 2))}
+                className="px-1 py-1 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-colors"
+                aria-label="여백 줄이기"
+              >
+                <Minus className="w-2.5 h-2.5" />
+              </button>
+              <span className="w-7 text-center font-mono text-[10px] text-amber-400 font-semibold select-none">
+                {autoCropPadding}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAutoCropPadding((p) => Math.min(200, p + 2))}
+                className="px-1 py-1 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-colors"
+                aria-label="여백 늘리기"
+              >
+                <Plus className="w-2.5 h-2.5" />
+              </button>
+            </div>
+
+            <span className="text-stone-700">|</span>
+
+            <button
+              type="button"
+              onClick={applyCrop}
+              disabled={!cropBox || cropBox.w < 20 || cropBox.h < 20}
+              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-stone-950 font-bold text-[11px] rounded transition-colors"
+              title="크롭 영역으로 캔버스 크기 변경 (Enter)"
+            >
+              적용
+            </button>
+            <button
+              type="button"
+              onClick={() => setCropBox(null)}
+              disabled={!cropBox}
+              className="px-2 py-1 bg-stone-800 hover:bg-stone-700 disabled:opacity-40 disabled:cursor-not-allowed text-stone-300 text-[11px] rounded transition-colors"
+              title="크롭 취소 (Esc)"
+            >
+              취소
+            </button>
+          </div>
+
+          {autoCropNotice && (
+            <div className="pointer-events-none bg-stone-900/95 backdrop-blur border border-stone-700 rounded-md px-3 py-1 text-[10px] text-stone-300 shadow-lg">
+              {autoCropNotice}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Image Crop – auto crop notice */}
+      {croppingImageId && autoCropNotice && (
+        <div className="absolute top-9 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-stone-900/95 backdrop-blur border border-stone-700 rounded-md px-3 py-1.5 text-[10px] text-stone-200 shadow-lg whitespace-nowrap">
+          {autoCropNotice}
+        </div>
+      )}
 
       {/* Radial Array – step guide banner */}
       {currentTool === 'radial' && radialToolState && radialToolState.step !== 'idle' && (

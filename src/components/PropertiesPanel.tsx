@@ -7,6 +7,9 @@ import {
   CanvasConfig,
   RadialToolState,
   RadialRotateMode,
+  ArrowType,
+  ArrowSize,
+  LineCap,
 } from '../types';
 import { FONT_FAMILIES } from '../utils/colorUtils';
 import { finalizeArcGeometry } from '../utils/shapeGenerators';
@@ -1098,6 +1101,143 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 </button>
               ))}
             </div>
+
+            {/* Arrow Line Caps (for line/arrow types) */}
+            {isStraightLine && (
+              <div className="space-y-1.5 pt-2 border-t border-stone-800/50">
+                <span className="text-[11px] text-stone-400 font-medium">선 끝 모양 (Line Cap)</span>
+                <div className="flex items-center space-x-1">
+                  {(['round', 'flat', 'square'] as LineCap[]).map((cap) => (
+                    <button
+                      key={cap}
+                      onClick={() => onUpdateElement({ ...shape, lineCap: cap })}
+                      className={`flex-1 py-1 rounded border text-[11px] capitalize ${
+                        (shape.lineCap || 'round') === cap
+                          ? 'border-amber-500 bg-amber-500/10 text-amber-300'
+                          : 'border-stone-800 text-stone-400'
+                      }`}
+                    >
+                      {cap === 'round' ? '둥근' : cap === 'flat' ? '평평' : '사각'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* PowerPoint-style Arrow Head Configuration */}
+            {isStraightLine && (
+              <div className="space-y-2 pt-2 border-t border-stone-800/50">
+                <span className="text-[11px] text-stone-400 font-medium">화살표 머리 (PowerPoint 스타일)</span>
+                
+                {/* Begin Arrow */}
+                <div className="space-y-1">
+                  <span className="text-[10px] text-stone-500">시작 화살표</span>
+                  <div className="grid grid-cols-6 gap-1">
+                    {(['none', 'triangle', 'open', 'stealth', 'oval', 'diamond'] as ArrowType[]).map((type) => {
+                      const icons = {
+                        none: '—',
+                        triangle: '◀',
+                        open: '⟨',
+                        stealth: '◂',
+                        oval: '●',
+                        diamond: '◆'
+                      };
+                      const isActive = (shape.beginArrow?.type || 'none') === type;
+                      return (
+                        <button
+                          key={type}
+                          onClick={() => onUpdateElement({
+                            ...shape,
+                            beginArrow: { type, size: shape.beginArrow?.size || 'medium' }
+                          })}
+                          className={`px-1 py-1.5 rounded border text-xs font-medium transition-colors ${
+                            isActive
+                              ? 'border-amber-500 bg-amber-500/20 text-amber-300'
+                              : 'border-stone-800 text-stone-400 hover:bg-stone-800'
+                          }`}
+                          title={type}
+                        >
+                          {icons[type]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <span className="text-[10px] text-stone-500 w-8 shrink-0">크기:</span>
+                    {(['small', 'medium', 'large'] as ArrowSize[]).map((size) => (
+                      <button
+                        key={size}
+                        onClick={() => onUpdateElement({
+                          ...shape,
+                          beginArrow: { type: shape.beginArrow?.type || 'none', size }
+                        })}
+                        className={`flex-1 py-0.5 rounded border text-[10px] ${
+                          (shape.beginArrow?.size || 'medium') === size
+                            ? 'border-amber-500 bg-amber-500/10 text-amber-300'
+                            : 'border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        {size === 'small' ? 'S' : size === 'medium' ? 'M' : 'L'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* End Arrow */}
+                <div className="space-y-1">
+                  <span className="text-[10px] text-stone-500">끝 화살표</span>
+                  <div className="grid grid-cols-6 gap-1">
+                    {(['none', 'triangle', 'open', 'stealth', 'oval', 'diamond'] as ArrowType[]).map((type) => {
+                      const icons = {
+                        none: '—',
+                        triangle: '▶',
+                        open: '⟩',
+                        stealth: '▸',
+                        oval: '●',
+                        diamond: '◆'
+                      };
+                      const isActive = (shape.endArrow?.type || 'none') === type;
+                      return (
+                        <button
+                          key={type}
+                          onClick={() => onUpdateElement({
+                            ...shape,
+                            endArrow: { type, size: shape.endArrow?.size || 'medium' }
+                          })}
+                          className={`px-1 py-1.5 rounded border text-xs font-medium transition-colors ${
+                            isActive
+                              ? 'border-amber-500 bg-amber-500/20 text-amber-300'
+                              : 'border-stone-800 text-stone-400 hover:bg-stone-800'
+                          }`}
+                          title={type}
+                        >
+                          {icons[type]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <span className="text-[10px] text-stone-500 w-8 shrink-0">크기:</span>
+                    {(['small', 'medium', 'large'] as ArrowSize[]).map((size) => (
+                      <button
+                        key={size}
+                        onClick={() => onUpdateElement({
+                          ...shape,
+                          endArrow: { type: shape.endArrow?.type || 'none', size }
+                        })}
+                        className={`flex-1 py-0.5 rounded border text-[10px] ${
+                          (shape.endArrow?.size || 'medium') === size
+                            ? 'border-amber-500 bg-amber-500/10 text-amber-300'
+                            : 'border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        {size === 'small' ? 'S' : size === 'medium' ? 'M' : 'L'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {isArc && shape.points && shape.points.length >= 2 && (
               <div className="space-y-1.5 pt-2 border-t border-stone-700/50">

@@ -24,7 +24,7 @@ import {
   isArrowHeadFilled,
   getConstrainedPoint,
 } from '../utils/arrowUtils';
-import type { ArrowConfig } from '../types';
+import type { ArrowConfig, ArrowType, ArrowSize } from '../types';
 import { ArrowLineRenderer } from './ArrowLineRenderer';
 import { sampleColorFromCanvas } from '../utils/rasterExport';
 import { getToolCursor } from '../utils/cursorUtils';
@@ -2908,124 +2908,94 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             />
           )}
 
-          {/* Active LINE Live Drawing Preview (Direct from start to end) */}
+          {/* Active LINE Live Drawing Preview - PowerPoint style */}
           {isDrawing &&
             currentTool === 'shape' &&
             (selectedShapeType === 'line' || selectedShapeType.startsWith('line-arrow')) &&
             linePreviewEnd && (() => {
             const activeLineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
             const activeStrokeW = (lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0) ? lastShapeStyle.strokeWidth : (strokeWidth || 2);
+            
+            // Map shapeType to arrow configuration for preview
+            let beginArrow = { type: 'none' as ArrowType, size: 'medium' as ArrowSize };
+            let endArrow = { type: 'none' as ArrowType, size: 'medium' as ArrowSize };
+            
+            if (selectedShapeType.startsWith('line-arrow')) {
+              if (selectedShapeType === 'line-arrow') {
+                endArrow = { type: 'triangle', size: 'medium' };
+              } else if (selectedShapeType === 'line-arrow-both') {
+                beginArrow = { type: 'triangle', size: 'medium' };
+                endArrow = { type: 'triangle', size: 'medium' };
+              } else if (selectedShapeType === 'line-arrow-start') {
+                beginArrow = { type: 'triangle', size: 'medium' };
+              } else if (selectedShapeType === 'line-arrow-open') {
+                endArrow = { type: 'open', size: 'medium' };
+              } else if (selectedShapeType === 'line-arrow-dot') {
+                endArrow = { type: 'oval', size: 'medium' };
+              } else if (selectedShapeType === 'line-arrow-diamond') {
+                endArrow = { type: 'diamond', size: 'medium' };
+              }
+            }
+            
+            // Calculate shortened endpoints
+            const shortened = getShortenedLineEndpoints(
+              drawStart.x,
+              drawStart.y,
+              linePreviewEnd.x,
+              linePreviewEnd.y,
+              activeStrokeW,
+              beginArrow.type,
+              beginArrow.size,
+              endArrow.type,
+              endArrow.size
+            );
+            
+            const dx = linePreviewEnd.x - drawStart.x;
+            const dy = linePreviewEnd.y - drawStart.y;
+            const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+            
             return (
               <g pointerEvents="none">
+                {/* Shortened line shaft (dashed for preview) */}
                 <line
-                  x1={drawStart.x}
-                  y1={drawStart.y}
-                  x2={linePreviewEnd.x}
-                  y2={linePreviewEnd.y}
+                  x1={shortened.startX}
+                  y1={shortened.startY}
+                  x2={shortened.endX}
+                  y2={shortened.endY}
                   stroke={activeLineStroke}
                   strokeWidth={activeStrokeW}
                   strokeLinecap="round"
                   strokeDasharray="6 4"
                 />
-                {['line-arrow', 'line-arrow-both', 'line-arrow-start', 'line-arrow-open'].includes(selectedShapeType) && (() => {
-                  const dx = linePreviewEnd.x - drawStart.x;
-                  const dy = linePreviewEnd.y - drawStart.y;
-                  const len = Math.hypot(dx, dy);
-                  if (len < 6) return null;
-                  const angle = Math.atan2(dy, dx);
-                  const baseSize = Math.min(18, Math.max(10, len * 0.2));
-                  const headSize = baseSize * (activeStrokeW / 2);
-                  const a1 = angle - Math.PI / 6;
-                  const a2 = angle + Math.PI / 6;
-
-                  const endArrow = (
-                    <path
-                      d={`M ${linePreviewEnd.x - headSize * Math.cos(a1)} ${linePreviewEnd.y - headSize * Math.sin(a1)} L ${linePreviewEnd.x} ${linePreviewEnd.y} L ${linePreviewEnd.x - headSize * Math.cos(a2)} ${linePreviewEnd.y - headSize * Math.sin(a2)}`}
-                      fill={selectedShapeType === 'line-arrow-open' ? 'none' : activeLineStroke}
-                      stroke={activeLineStroke}
-                      strokeWidth={activeStrokeW}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  );
-
-                  const startArrow =
-                    selectedShapeType === 'line-arrow-both' || selectedShapeType === 'line-arrow-start'
-                      ? (() => {
-                          const x1 = drawStart.x + headSize * Math.cos(a1);
-                          const y1 = drawStart.y + headSize * Math.sin(a1);
-                          const x2 = drawStart.x + headSize * Math.cos(a2);
-                          const y2 = drawStart.y + headSize * Math.sin(a2);
-                          return (
-                            <path
-                              d={`M ${x1} ${y1} L ${drawStart.x} ${drawStart.y} L ${x2} ${y2}`}
-                              fill={selectedShapeType === 'line-arrow-open' ? 'none' : activeLineStroke}
-                              stroke={activeLineStroke}
-                              strokeWidth={activeStrokeW}
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          );
-                        })()
-                      : null;
-
-                  return (
-                    <>
-                      {endArrow}
-                      {startArrow}
-                    </>
-                  );
-                })()}
-
-                {/* line-arrow-dot preview */}
-                {selectedShapeType === 'line-arrow-dot' && (() => {
-                  const dx = linePreviewEnd.x - drawStart.x;
-                  const dy = linePreviewEnd.y - drawStart.y;
-                  const len = Math.hypot(dx, dy);
-                  if (len < 6) return null;
-                  const baseR = 5;
-                  const dotR = baseR * (activeStrokeW / 2);
-                  return (
-                    <circle
-                      cx={linePreviewEnd.x}
-                      cy={linePreviewEnd.y}
-                      r={dotR}
-                      fill={activeLineStroke}
-                      stroke="#000000"
-                      strokeWidth={1}
-                    />
-                  );
-                })()}
-
-                {/* line-arrow-diamond preview */}
-                {selectedShapeType === 'line-arrow-diamond' && (() => {
-                  const dx = linePreviewEnd.x - drawStart.x;
-                  const dy = linePreviewEnd.y - drawStart.y;
-                  const len = Math.hypot(dx, dy);
-                  if (len < 6) return null;
-                  const angle = Math.atan2(dy, dx);
-                  const baseD = 8;
-                  const d = baseD * (activeStrokeW / 2);
-                  const x1 = linePreviewEnd.x - d * Math.cos(angle - Math.PI / 2) * 0.6;
-                  const y1 = linePreviewEnd.y - d * Math.sin(angle - Math.PI / 2) * 0.6;
-                  const x2 = linePreviewEnd.x + d * Math.cos(angle);
-                  const y2 = linePreviewEnd.y + d * Math.sin(angle);
-                  const x3 = linePreviewEnd.x - d * Math.cos(angle + Math.PI / 2) * 0.6;
-                  const y3 = linePreviewEnd.y - d * Math.sin(angle + Math.PI / 2) * 0.6;
-                  const x4 = linePreviewEnd.x - d * Math.cos(angle);
-                  const y4 = linePreviewEnd.y - d * Math.sin(angle);
-                  return (
-                    <path
-                      d={`M ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} L ${x4} ${y4} Z`}
-                      fill={activeLineStroke}
-                      stroke={activeLineStroke}
-                      strokeWidth={1}
-                    />
-                  );
-                })()}
-                {/* Start point dot */}
+                
+                {/* Begin arrow head */}
+                {beginArrow.type !== 'none' && (
+                  <path
+                    d={getArrowHeadPath(activeStrokeW, beginArrow.type, beginArrow.size)}
+                    transform={`translate(${drawStart.x}, ${drawStart.y}) rotate(${angle})`}
+                    fill={isArrowHeadFilled(beginArrow.type) ? activeLineStroke : 'none'}
+                    stroke={activeLineStroke}
+                    strokeWidth={isArrowHeadFilled(beginArrow.type) ? 0 : activeStrokeW}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+                
+                {/* End arrow head */}
+                {endArrow.type !== 'none' && (
+                  <path
+                    d={getArrowHeadPath(activeStrokeW, endArrow.type, endArrow.size)}
+                    transform={`translate(${linePreviewEnd.x}, ${linePreviewEnd.y}) rotate(${angle})`}
+                    fill={isArrowHeadFilled(endArrow.type) ? activeLineStroke : 'none'}
+                    stroke={activeLineStroke}
+                    strokeWidth={isArrowHeadFilled(endArrow.type) ? 0 : activeStrokeW}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+                
+                {/* Start/end point indicators */}
                 <circle cx={drawStart.x} cy={drawStart.y} r={4} fill="#F59E0B" stroke="#000000" strokeWidth={1} />
-                {/* End point dot / indicator */}
                 <circle cx={linePreviewEnd.x} cy={linePreviewEnd.y} r={4} fill="#F59E0B" stroke="#000000" strokeWidth={1} />
               </g>
             );

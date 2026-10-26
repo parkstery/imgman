@@ -18,6 +18,14 @@ import {
 import { getShapePath, getPolylinePath, finalizePolylineGeometry, getArcPath, computeArcFromChordAndBend, finalizeArcGeometry } from '../utils/shapeGenerators';
 import { getRotationOriginAttr } from '../utils/elementGeometry';
 import { brushPath } from '../utils/svgExport';
+import {
+  getArrowHeadPath,
+  getShortenedLineEndpoints,
+  isArrowHeadFilled,
+  getConstrainedPoint,
+} from '../utils/arrowUtils';
+import type { ArrowConfig } from '../types';
+import { ArrowLineRenderer } from './ArrowLineRenderer';
 import { sampleColorFromCanvas } from '../utils/rasterExport';
 import { getToolCursor } from '../utils/cursorUtils';
 import {
@@ -1248,18 +1256,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     ) {
       let targetPt = config.snapToGrid ? { x: snapValue(pt.x), y: snapValue(pt.y) } : pt;
       if (e.shiftKey) {
-        // Snap line angle to 0, 45, 90, 135, 180, 225, 270, 315 degrees
-        const dx = targetPt.x - drawStart.x;
-        const dy = targetPt.y - drawStart.y;
-        const dist = Math.hypot(dx, dy);
-        const rad = Math.atan2(dy, dx);
-        const deg = (rad * 180) / Math.PI;
-        const snappedDeg = Math.round(deg / 45) * 45;
-        const snappedRad = (snappedDeg * Math.PI) / 180;
-        targetPt = {
-          x: drawStart.x + Math.cos(snappedRad) * dist,
-          y: drawStart.y + Math.sin(snappedRad) * dist,
-        };
+        // Snap line angle to 15 degree increments (PowerPoint-style)
+        targetPt = getConstrainedPoint(drawStart.x, drawStart.y, targetPt.x, targetPt.y);
       }
       setLinePreviewEnd(targetPt);
       return;
@@ -1633,13 +1631,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       setIsDrawing(false);
     }
 
-    // Finish LINE Shape creation (Direct Start Point to End Point)
+    // Finish LINE Shape creation (Direct Start Point to End Point) - PowerPoint style
     if (
       isDrawing &&
       currentTool === 'shape' &&
       (selectedShapeType === 'line' || selectedShapeType.startsWith('line-arrow'))
     ) {
-      const endPt = linePreviewEnd || drawStart;
+      let endPt = linePreviewEnd || drawStart;
       let startX = drawStart.x;
       let startY = drawStart.y;
       let endX = endPt.x;
@@ -1663,6 +1661,27 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const thickness = Math.max(strokeW * 4, 16);
       const lineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
 
+      // Map shapeType to PowerPoint-style arrow configuration
+      let beginArrow: ArrowConfig = { type: 'none', size: 'medium' };
+      let endArrow: ArrowConfig = { type: 'none', size: 'medium' };
+      
+      if (selectedShapeType.startsWith('line-arrow')) {
+        if (selectedShapeType === 'line-arrow') {
+          endArrow = { type: 'triangle', size: 'medium' };
+        } else if (selectedShapeType === 'line-arrow-both') {
+          beginArrow = { type: 'triangle', size: 'medium' };
+          endArrow = { type: 'triangle', size: 'medium' };
+        } else if (selectedShapeType === 'line-arrow-start') {
+          beginArrow = { type: 'triangle', size: 'medium' };
+        } else if (selectedShapeType === 'line-arrow-open') {
+          endArrow = { type: 'open', size: 'medium' };
+        } else if (selectedShapeType === 'line-arrow-dot') {
+          endArrow = { type: 'oval', size: 'medium' };
+        } else if (selectedShapeType === 'line-arrow-diamond') {
+          endArrow = { type: 'diamond', size: 'medium' };
+        }
+      }
+
       const arrowNameMap: Record<string, string> = {
         'line-arrow': '끝 화살표',
         'line-arrow-both': '양끝 화살표',
@@ -1671,6 +1690,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         'line-arrow-dot': '끝 점 화살표',
         'line-arrow-diamond': '마름모 화살표',
       };
+      
       const newLineShape: ShapeElement = {
         id: 'shape-line-' + Date.now(),
         layerId: activeLayer.id,
@@ -1688,6 +1708,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         strokeWidth: strokeW,
         strokeDash: lastShapeStyle.strokeDash || 'solid',
         shadow: lastShapeStyle.shadow,
+        lineCap: 'round',
+        beginArrow,
+        endArrow,
+        // Store actual endpoints in points for PowerPoint-style behavior
+        points: [
+          { x: 0, y: thickness / 2 },
+          { x: Math.round(finalLength), y: thickness / 2 }
+        ],
       };
 
       onAddElement(newLineShape);
@@ -2419,113 +2447,127 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                         <g
                           transform={`translate(${el.x}, ${el.y}) rotate(${rot} ${getRotationOriginAttr(el)})`}
                         >
-                          {/* Invisible Extra-Wide Hitbox for 1-Click Selection */}
-                          {el.shapeType === 'line' || el.shapeType.startsWith('line-arrow') ? (
-                            <line
-                              x1={0}
-                              y1={el.height / 2}
-                              x2={el.width}
-                              y2={el.height / 2}
-                              stroke="transparent"
-                              strokeWidth={Math.max(el.strokeWidth, 24)}
-                              pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
-                              className={currentTool === 'select' ? 'cursor-pointer' : ''}
-                            />
-                          ) : el.shapeType === 'polyline' && el.points && el.points.length >= 2 ? (
-                            <path
-                              d={getPolylinePath(el.points)}
-                              fill="none"
-                              stroke="transparent"
-                              strokeWidth={Math.max(el.strokeWidth, 24)}
-                              pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
-                              className={currentTool === 'select' ? 'cursor-pointer' : ''}
-                            />
-                          ) : el.shapeType === 'arc' &&
-                            el.points &&
-                            el.points.length >= 2 &&
-                            el.arcRadius != null ? (
-                            <path
-                              d={getArcPath(
-                                el.points[0],
-                                el.points[1],
-                                el.arcRadius,
-                                !!el.arcLarge,
-                                !!el.arcSweep
-                              )}
-                              fill="none"
-                              stroke="transparent"
-                              strokeWidth={Math.max(el.strokeWidth, 24)}
-                              pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
-                              className={currentTool === 'select' ? 'cursor-pointer' : ''}
+                          {/* PowerPoint-style arrow lines with proper arrow heads */}
+                          {(el.shapeType === 'line' || el.shapeType.startsWith('line-arrow')) && 
+                           (el.beginArrow || el.endArrow) ? (
+                            <ArrowLineRenderer
+                              el={el}
+                              isSelected={isSelected}
+                              filterAttr={filterAttr}
+                              isSelectOrElementTool={isSelectOrElementTool}
+                              currentTool={currentTool}
                             />
                           ) : (
-                            <path
-                              d={getShapePath(el.shapeType, el.width, el.height, el.cornerRadius, el.strokeWidth)}
-                              fill="transparent"
-                              stroke="transparent"
-                              strokeWidth={Math.max(el.strokeWidth, 16)}
-                              pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
-                              className={currentTool === 'select' ? 'cursor-pointer' : ''}
-                            />
-                          )}
-
-                          {/* Visual Visible Shape Path */}
-                          <path
-                            d={
-                              el.shapeType === 'polyline' && el.points && el.points.length >= 2
-                                ? getPolylinePath(el.points)
-                                : el.shapeType === 'arc' &&
-                                  el.points &&
-                                  el.points.length >= 2 &&
-                                  el.arcRadius != null
-                                ? getArcPath(
+                            <>
+                              {/* Invisible Extra-Wide Hitbox for 1-Click Selection */}
+                              {el.shapeType === 'line' || el.shapeType.startsWith('line-arrow') ? (
+                                <line
+                                  x1={0}
+                                  y1={el.height / 2}
+                                  x2={el.width}
+                                  y2={el.height / 2}
+                                  stroke="transparent"
+                                  strokeWidth={Math.max(el.strokeWidth, 24)}
+                                  pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
+                                  className={currentTool === 'select' ? 'cursor-pointer' : ''}
+                                />
+                              ) : el.shapeType === 'polyline' && el.points && el.points.length >= 2 ? (
+                                <path
+                                  d={getPolylinePath(el.points)}
+                                  fill="none"
+                                  stroke="transparent"
+                                  strokeWidth={Math.max(el.strokeWidth, 24)}
+                                  pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
+                                  className={currentTool === 'select' ? 'cursor-pointer' : ''}
+                                />
+                              ) : el.shapeType === 'arc' &&
+                                el.points &&
+                                el.points.length >= 2 &&
+                                el.arcRadius != null ? (
+                                <path
+                                  d={getArcPath(
                                     el.points[0],
                                     el.points[1],
                                     el.arcRadius,
                                     !!el.arcLarge,
                                     !!el.arcSweep
-                                  )
-                                : getShapePath(el.shapeType, el.width, el.height, el.cornerRadius, el.strokeWidth)
-                            }
-                            fill={
-                              el.shapeType === 'line' ||
-                              el.shapeType === 'line-arrow' ||
-                              el.shapeType === 'polyline' ||
-                              el.shapeType === 'arc'
-                                ? 'none'
-                                : el.gradient?.enabled
-                                ? `url(#grad-${el.id})`
-                                : el.fill
-                            }
-                            stroke={el.stroke}
-                            strokeWidth={el.strokeWidth}
-                            strokeLinecap={
-                              el.shapeType === 'line' ||
-                              el.shapeType === 'line-arrow' ||
-                              el.shapeType === 'polyline' ||
-                              el.shapeType === 'arc'
-                                ? 'round'
-                                : undefined
-                            }
-                            strokeLinejoin={
-                              el.shapeType === 'line' ||
-                              el.shapeType === 'line-arrow' ||
-                              el.shapeType === 'polyline' ||
-                              el.shapeType === 'arc'
-                                ? 'round'
-                                : undefined
-                            }
-                            strokeDasharray={
-                              el.strokeDash === 'dashed'
-                                ? '8 6'
-                                : el.strokeDash === 'dotted'
-                                ? '3 4'
-                                : undefined
-                            }
-                            opacity={el.opacity}
-                            filter={filterAttr}
-                            pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
-                          />
+                                  )}
+                                  fill="none"
+                                  stroke="transparent"
+                                  strokeWidth={Math.max(el.strokeWidth, 24)}
+                                  pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
+                                  className={currentTool === 'select' ? 'cursor-pointer' : ''}
+                                />
+                              ) : (
+                                <path
+                                  d={getShapePath(el.shapeType, el.width, el.height, el.cornerRadius, el.strokeWidth)}
+                                  fill="transparent"
+                                  stroke="transparent"
+                                  strokeWidth={Math.max(el.strokeWidth, 16)}
+                                  pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
+                                  className={currentTool === 'select' ? 'cursor-pointer' : ''}
+                                />
+                              )}
+
+                              {/* Visual Visible Shape Path */}
+                              <path
+                                d={
+                                  el.shapeType === 'polyline' && el.points && el.points.length >= 2
+                                    ? getPolylinePath(el.points)
+                                    : el.shapeType === 'arc' &&
+                                      el.points &&
+                                      el.points.length >= 2 &&
+                                      el.arcRadius != null
+                                    ? getArcPath(
+                                        el.points[0],
+                                        el.points[1],
+                                        el.arcRadius,
+                                        !!el.arcLarge,
+                                        !!el.arcSweep
+                                      )
+                                    : getShapePath(el.shapeType, el.width, el.height, el.cornerRadius, el.strokeWidth)
+                                }
+                                fill={
+                                  el.shapeType === 'line' ||
+                                  el.shapeType === 'line-arrow' ||
+                                  el.shapeType === 'polyline' ||
+                                  el.shapeType === 'arc'
+                                    ? 'none'
+                                    : el.gradient?.enabled
+                                    ? `url(#grad-${el.id})`
+                                    : el.fill
+                                }
+                                stroke={el.stroke}
+                                strokeWidth={el.strokeWidth}
+                                strokeLinecap={
+                                  el.shapeType === 'line' ||
+                                  el.shapeType === 'line-arrow' ||
+                                  el.shapeType === 'polyline' ||
+                                  el.shapeType === 'arc'
+                                    ? 'round'
+                                    : undefined
+                                }
+                                strokeLinejoin={
+                                  el.shapeType === 'line' ||
+                                  el.shapeType === 'line-arrow' ||
+                                  el.shapeType === 'polyline' ||
+                                  el.shapeType === 'arc'
+                                    ? 'round'
+                                    : undefined
+                                }
+                                strokeDasharray={
+                                  el.strokeDash === 'dashed'
+                                    ? '8 6'
+                                    : el.strokeDash === 'dotted'
+                                    ? '3 4'
+                                    : undefined
+                                }
+                                opacity={el.opacity}
+                                filter={filterAttr}
+                                pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
+                              />
+                            </>
+                          )}
                         </g>
                       )}
 

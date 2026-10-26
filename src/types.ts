@@ -70,6 +70,16 @@ export interface ShapeStylePreset {
   shadow?: ShadowSettings;
 }
 
+// PowerPoint-style arrow configuration
+export type ArrowType = 'none' | 'triangle' | 'open' | 'stealth' | 'oval' | 'diamond';
+export type ArrowSize = 'small' | 'medium' | 'large';
+export type LineCap = 'flat' | 'round' | 'square';
+
+export interface ArrowConfig {
+  type: ArrowType;
+  size: ArrowSize;
+}
+
 export interface ShapeElement extends BaseElement {
   type: 'shape';
   shapeType: ShapeType;
@@ -87,6 +97,14 @@ export interface ShapeElement extends BaseElement {
   arcLarge?: boolean;
   /** SVG sweep-flag (direction) */
   arcSweep?: boolean;
+  
+  // PowerPoint-style arrow line properties (for line/arrow types)
+  /** Line cap style for arrow lines */
+  lineCap?: LineCap;
+  /** Begin arrow configuration */
+  beginArrow?: ArrowConfig;
+  /** End arrow configuration */
+  endArrow?: ArrowConfig;
 }
 
 export interface Point {

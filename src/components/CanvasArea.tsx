@@ -26,6 +26,7 @@ import {
 } from '../utils/arrowUtils';
 import type { ArrowConfig, ArrowType, ArrowSize } from '../types';
 import { ArrowLineRenderer } from './ArrowLineRenderer';
+import { ArrowPropertiesPanel } from './ArrowPropertiesPanel';
 import { sampleColorFromCanvas } from '../utils/rasterExport';
 import { getToolCursor } from '../utils/cursorUtils';
 import {
@@ -280,6 +281,18 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
   // Line drawing preview state (start to current)
   const [linePreviewEnd, setLinePreviewEnd] = useState<Point | null>(null);
+
+  // Arrow properties panel state
+  const [showArrowProperties, setShowArrowProperties] = useState(false);
+  
+  // Arrow defaults for new arrows
+  const [arrowDefaults, setArrowDefaults] = useState({
+    beginArrow: { type: 'none' as ArrowType, size: 'medium' as ArrowSize },
+    endArrow: { type: 'triangle' as ArrowType, size: 'medium' as ArrowSize },
+    strokeWidth: 2,
+    strokeDash: 'solid' as 'solid' | 'dashed' | 'dotted',
+    lineCap: 'round' as 'flat' | 'round' | 'square',
+  });
 
   // Continuous polyline (node-to-node) drawing draft — absolute canvas coords
   const [polylineDraft, setPolylineDraft] = useState<Point[] | null>(null);
@@ -698,6 +711,55 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       h: Math.max(1, maxY - minY),
     };
   }, [selectedElements]);
+
+  // Show arrow properties panel when an arrow line is selected
+  useEffect(() => {
+    if (selectedElement && 
+        selectedElement.type === 'shape' && 
+        selectedElement.shapeType.startsWith('line-arrow') &&
+        selectedElementIds.length === 1) {
+      setShowArrowProperties(true);
+    } else {
+      setShowArrowProperties(false);
+    }
+  }, [selectedElement, selectedElementIds]);
+
+  // Handle arrow properties change for selected arrow
+  const handleArrowPropertiesChange = useCallback((props: {
+    beginArrow?: ArrowConfig;
+    endArrow?: ArrowConfig;
+    strokeWidth?: number;
+    strokeColor?: string;
+    strokeDash?: 'solid' | 'dashed' | 'dotted';
+    lineCap?: 'flat' | 'round' | 'square';
+  }) => {
+    if (!selectedElement || selectedElement.type !== 'shape') return;
+    
+    const updates: Partial<ShapeElement> = {};
+    if (props.beginArrow !== undefined) updates.beginArrow = props.beginArrow;
+    if (props.endArrow !== undefined) updates.endArrow = props.endArrow;
+    if (props.strokeWidth !== undefined) updates.strokeWidth = props.strokeWidth;
+    if (props.strokeColor !== undefined) updates.stroke = props.strokeColor;
+    if (props.strokeDash !== undefined) updates.strokeDash = props.strokeDash;
+    if (props.lineCap !== undefined) updates.lineCap = props.lineCap;
+    
+    onUpdateElement({ ...selectedElement, ...updates }, { skipHistory: false });
+  }, [selectedElement, onUpdateElement]);
+
+  // Handle arrow defaults change
+  const handleArrowDefaultsChange = useCallback((props: {
+    beginArrow?: ArrowConfig;
+    endArrow?: ArrowConfig;
+    strokeWidth?: number;
+    strokeColor?: string;
+    strokeDash?: 'solid' | 'dashed' | 'dotted';
+    lineCap?: 'flat' | 'round' | 'square';
+  }) => {
+    setArrowDefaults(prev => ({
+      ...prev,
+      ...props,
+    }));
+  }, []);
 
   const activeLayer = useMemo(
     () => layers.find((l) => l.id === activeLayerId) || layers[0],
@@ -1702,13 +1764,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       // Create line if length is at least 4px (or default horizontal line if just clicked)
       const finalLength = length >= 4 ? length : 140;
       const deg = length >= 4 ? (Math.atan2(dy, dx) * 180) / Math.PI : 0;
-      const strokeW = (lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0) ? lastShapeStyle.strokeWidth : (strokeWidth || 2);
+      const strokeW = (lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0) ? lastShapeStyle.strokeWidth : (arrowDefaults.strokeWidth || strokeWidth || 2);
       const thickness = Math.max(strokeW * 4, 16);
       const lineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
 
-      // Map shapeType to PowerPoint-style arrow configuration
-      let beginArrow: ArrowConfig = { type: 'none', size: 'medium' };
-      let endArrow: ArrowConfig = { type: 'none', size: 'medium' };
+      // Map shapeType to PowerPoint-style arrow configuration - use defaults from arrowDefaults
+      let beginArrow: ArrowConfig = arrowDefaults.beginArrow;
+      let endArrow: ArrowConfig = arrowDefaults.endArrow;
       
       if (selectedShapeType.startsWith('line-arrow')) {
         if (selectedShapeType === 'line-arrow') {
@@ -1751,9 +1813,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         fill: 'none',
         stroke: lineStroke,
         strokeWidth: strokeW,
-        strokeDash: lastShapeStyle.strokeDash || 'solid',
+        strokeDash: lastShapeStyle.strokeDash || arrowDefaults.strokeDash || 'solid',
         shadow: lastShapeStyle.shadow,
-        lineCap: 'round',
+        lineCap: arrowDefaults.lineCap || 'round',
         beginArrow,
         endArrow,
         // Store actual endpoints in points for PowerPoint-style behavior
@@ -2916,9 +2978,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             const activeLineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
             const activeStrokeW = (lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0) ? lastShapeStyle.strokeWidth : (strokeWidth || 2);
             
-            // Map shapeType to arrow configuration for preview
-            let beginArrow = { type: 'none' as ArrowType, size: 'medium' as ArrowSize };
-            let endArrow = { type: 'none' as ArrowType, size: 'medium' as ArrowSize };
+            // Map shapeType to arrow configuration for preview - use defaults if available
+            let beginArrow = arrowDefaults.beginArrow;
+            let endArrow = arrowDefaults.endArrow;
             
             if (selectedShapeType.startsWith('line-arrow')) {
               if (selectedShapeType === 'line-arrow') {
@@ -2937,62 +2999,51 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               }
             }
             
-            // Calculate shortened endpoints
-            const shortened = getShortenedLineEndpoints(
-              drawStart.x,
-              drawStart.y,
-              linePreviewEnd.x,
-              linePreviewEnd.y,
-              activeStrokeW,
-              beginArrow.type,
-              beginArrow.size,
-              endArrow.type,
-              endArrow.size
-            );
-            
+            // Calculate length and create preview element for ArrowLineRenderer
             const dx = linePreviewEnd.x - drawStart.x;
             const dy = linePreviewEnd.y - drawStart.y;
+            const length = Math.hypot(dx, dy);
             const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+            
+            // Create a temporary ShapeElement for preview rendering
+            const previewElement: ShapeElement = {
+              id: 'preview-arrow',
+              type: 'shape',
+              shapeType: selectedShapeType,
+              layerId: activeLayerId,
+              name: '미리보기 화살표',
+              x: drawStart.x,
+              y: drawStart.y - activeStrokeW * 2,
+              width: length,
+              height: activeStrokeW * 4,
+              rotation: angle,
+              fill: 'none',
+              stroke: activeLineStroke,
+              strokeWidth: activeStrokeW,
+              strokeDash: lastShapeStyle.strokeDash || 'solid',
+              opacity: 0.8,
+              visible: true,
+              locked: false,
+              lineCap: arrowDefaults.lineCap,
+              beginArrow,
+              endArrow,
+              points: [
+                { x: 0, y: activeStrokeW * 2 },
+                { x: length, y: activeStrokeW * 2 }
+              ],
+            };
             
             return (
               <g pointerEvents="none">
-                {/* Shortened line shaft (dashed for preview) */}
-                <line
-                  x1={shortened.startX}
-                  y1={shortened.startY}
-                  x2={shortened.endX}
-                  y2={shortened.endY}
-                  stroke={activeLineStroke}
-                  strokeWidth={activeStrokeW}
-                  strokeLinecap="round"
-                  strokeDasharray="6 4"
-                />
-                
-                {/* Begin arrow head */}
-                {beginArrow.type !== 'none' && (
-                  <path
-                    d={getArrowHeadPath(activeStrokeW, beginArrow.type, beginArrow.size)}
-                    transform={`translate(${drawStart.x}, ${drawStart.y}) rotate(${angle})`}
-                    fill={isArrowHeadFilled(beginArrow.type) ? activeLineStroke : 'none'}
-                    stroke={activeLineStroke}
-                    strokeWidth={isArrowHeadFilled(beginArrow.type) ? 0 : activeStrokeW}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                {/* Use ArrowLineRenderer for preview to match final result */}
+                <g transform={`translate(${drawStart.x}, ${drawStart.y - activeStrokeW * 2}) rotate(${angle} ${0} ${activeStrokeW * 2})`} opacity={0.8}>
+                  <ArrowLineRenderer
+                    el={previewElement}
+                    isSelected={false}
+                    isSelectOrElementTool={false}
+                    currentTool={currentTool}
                   />
-                )}
-                
-                {/* End arrow head */}
-                {endArrow.type !== 'none' && (
-                  <path
-                    d={getArrowHeadPath(activeStrokeW, endArrow.type, endArrow.size)}
-                    transform={`translate(${linePreviewEnd.x}, ${linePreviewEnd.y}) rotate(${angle})`}
-                    fill={isArrowHeadFilled(endArrow.type) ? activeLineStroke : 'none'}
-                    stroke={activeLineStroke}
-                    strokeWidth={isArrowHeadFilled(endArrow.type) ? 0 : activeStrokeW}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                )}
+                </g>
                 
                 {/* Start/end point indicators */}
                 <circle cx={drawStart.x} cy={drawStart.y} r={4} fill="#F59E0B" stroke="#000000" strokeWidth={1} />
@@ -3768,6 +3819,21 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             취소
           </span>
         </div>
+      )}
+
+      {/* Arrow Properties Panel */}
+      {showArrowProperties && selectedElement && selectedElement.type === 'shape' && (
+        <ArrowPropertiesPanel
+          beginArrow={selectedElement.beginArrow}
+          endArrow={selectedElement.endArrow}
+          strokeWidth={selectedElement.strokeWidth}
+          strokeColor={selectedElement.stroke}
+          strokeDash={selectedElement.strokeDash as 'solid' | 'dashed' | 'dotted'}
+          lineCap={selectedElement.lineCap}
+          onPropertiesChange={handleArrowPropertiesChange}
+          onClose={() => setShowArrowProperties(false)}
+          isDefaults={false}
+        />
       )}
 
       {/* Bottom Status Info Bar */}

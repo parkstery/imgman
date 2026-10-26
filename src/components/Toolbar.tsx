@@ -50,6 +50,7 @@ interface ToolbarProps {
   onUngroup?: () => void;
   selectedElementIds: string[];
   elements: CanvasElement[];
+  onSelectMultipleElements?: (ids: string[]) => void;
 }
 
 const SHAPE_ITEMS: { type: ShapeType; label: string; icon: React.ReactNode }[] = [
@@ -94,6 +95,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onUngroup,
   selectedElementIds,
   elements,
+  onSelectMultipleElements,
 }) => {
   const [showShapeMenu, setShowShapeMenu] = useState(false);
   const [showArrowMenu, setShowArrowMenu] = useState(false);
@@ -102,6 +104,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const arrowMenuRef = useRef<HTMLDivElement>(null);
   const eyedropperBtnRef = useRef<HTMLButtonElement>(null);
   const colorPaletteRef = useRef<HTMLDivElement>(null);
+  const selectClickTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Close shape / arrow / color menus when clicking outside
   useEffect(() => {
@@ -121,7 +124,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      if (selectClickTimerRef.current) {
+        clearTimeout(selectClickTimerRef.current);
+      }
+    };
   }, []);
 
   // Keyboard shortcut (K) also opens the color palette
@@ -136,6 +144,38 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     ? primaryColor.toUpperCase()
     : primaryColor;
 
+  // Handle single-click on Select tool
+  const handleSelectClick = () => {
+    if (selectClickTimerRef.current) {
+      clearTimeout(selectClickTimerRef.current);
+      selectClickTimerRef.current = null;
+    }
+    
+    selectClickTimerRef.current = setTimeout(() => {
+      onSelectTool('select');
+      selectClickTimerRef.current = null;
+    }, 250);
+  };
+
+  // Handle double-click on Select tool - select all objects
+  const handleSelectDoubleClick = () => {
+    if (selectClickTimerRef.current) {
+      clearTimeout(selectClickTimerRef.current);
+      selectClickTimerRef.current = null;
+    }
+    
+    // Select all visible and unlocked elements
+    if (onSelectMultipleElements) {
+      const allSelectableIds = elements
+        .filter((el) => el.visible !== false && el.locked !== true)
+        .map((el) => el.id);
+      onSelectMultipleElements(allSelectableIds);
+    }
+    
+    // Keep select tool active
+    onSelectTool('select');
+  };
+
   return (
     <div className="h-12 bg-stone-900/95 border-b border-stone-800 text-stone-200 px-4 flex items-center justify-between select-none z-20 shrink-0 overflow-visible">
       {/* Left: Tools List */}
@@ -143,13 +183,14 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Select Tool */}
         <button
           id="tool-select"
-          onClick={() => onSelectTool('select')}
+          onClick={handleSelectClick}
+          onDoubleClick={handleSelectDoubleClick}
           className={`p-2 rounded-md transition-colors ${
             currentTool === 'select'
               ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
               : 'text-stone-300 hover:text-white hover:bg-stone-800'
           }`}
-          title="선택 / 이동 도구 (V)"
+          title="선택 / 이동 도구 (V) — 더블클릭: 전체 선택"
         >
           <MousePointer className="w-4 h-4" />
         </button>

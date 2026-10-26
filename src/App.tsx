@@ -2466,6 +2466,7 @@ export default function App() {
         onUngroup={handleUngroup}
         selectedElementIds={selectedElementIds}
         elements={elements}
+        onSelectMultipleElements={handleSelectMultipleElements}
       />
 
       {/* 3. Main Workspace: Layers Panel + Canvas */}

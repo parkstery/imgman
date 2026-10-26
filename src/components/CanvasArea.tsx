@@ -130,7 +130,7 @@ const RadialPreviewItem: React.FC<{ el: CanvasElement }> = ({ el }) => {
                     !!el.arcLarge,
                     !!el.arcSweep
                   )
-                : getShapePath(el.shapeType, el.width, el.height, el.cornerRadius)
+                : getShapePath(el.shapeType, el.width, el.height, el.cornerRadius, el.strokeWidth)
             }
             fill={isStrokeOnly ? 'none' : el.fill}
             stroke={el.stroke}
@@ -2460,7 +2460,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                             />
                           ) : (
                             <path
-                              d={getShapePath(el.shapeType, el.width, el.height, el.cornerRadius)}
+                              d={getShapePath(el.shapeType, el.width, el.height, el.cornerRadius, el.strokeWidth)}
                               fill="transparent"
                               stroke="transparent"
                               strokeWidth={Math.max(el.strokeWidth, 16)}
@@ -2485,7 +2485,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                                     !!el.arcLarge,
                                     !!el.arcSweep
                                   )
-                                : getShapePath(el.shapeType, el.width, el.height, el.cornerRadius)
+                                : getShapePath(el.shapeType, el.width, el.height, el.cornerRadius, el.strokeWidth)
                             }
                             fill={
                               el.shapeType === 'line' ||
@@ -2846,7 +2846,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                   const len = Math.hypot(dx, dy);
                   if (len < 6) return null;
                   const angle = Math.atan2(dy, dx);
-                  const headSize = Math.min(18, Math.max(10, len * 0.2));
+                  const baseSize = Math.min(18, Math.max(10, len * 0.2));
+                  const headSize = baseSize * (activeStrokeW / 2);
                   const a1 = angle - Math.PI / 6;
                   const a2 = angle + Math.PI / 6;
 
@@ -2895,7 +2896,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                   const dy = linePreviewEnd.y - drawStart.y;
                   const len = Math.hypot(dx, dy);
                   if (len < 6) return null;
-                  const dotR = 5;
+                  const baseR = 5;
+                  const dotR = baseR * (activeStrokeW / 2);
                   return (
                     <circle
                       cx={linePreviewEnd.x}
@@ -2915,7 +2917,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                   const len = Math.hypot(dx, dy);
                   if (len < 6) return null;
                   const angle = Math.atan2(dy, dx);
-                  const d = 8;
+                  const baseD = 8;
+                  const d = baseD * (activeStrokeW / 2);
                   const x1 = linePreviewEnd.x - d * Math.cos(angle - Math.PI / 2) * 0.6;
                   const y1 = linePreviewEnd.y - d * Math.sin(angle - Math.PI / 2) * 0.6;
                   const x2 = linePreviewEnd.x + d * Math.cos(angle);
@@ -3088,7 +3091,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             selectedShapeType !== 'arc' && (
             <g transform={`translate(${previewRect.x}, ${previewRect.y})`}>
               <path
-                d={getShapePath(selectedShapeType, previewRect.w, previewRect.h)}
+                d={getShapePath(selectedShapeType, previewRect.w, previewRect.h, undefined, strokeWidth)}
                 fill={
                   lastShapeStyle.fill === 'none' || lastShapeStyle.fill
                     ? lastShapeStyle.fill || 'none'

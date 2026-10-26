@@ -10,7 +10,7 @@ import {
   Type,
   Pipette,
   PaintBucket,
-  Camera,
+  Crop,
   Square,
   Circle,
   Triangle,
@@ -105,6 +105,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const eyedropperBtnRef = useRef<HTMLButtonElement>(null);
   const colorPaletteRef = useRef<HTMLDivElement>(null);
   const selectClickTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const arrowClickTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Close shape / arrow / color menus when clicking outside
   useEffect(() => {
@@ -128,6 +129,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       document.removeEventListener('mousedown', handleClickOutside);
       if (selectClickTimerRef.current) {
         clearTimeout(selectClickTimerRef.current);
+      }
+      if (arrowClickTimerRef.current) {
+        clearTimeout(arrowClickTimerRef.current);
       }
     };
   }, []);
@@ -174,6 +178,36 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     
     // Keep select tool active
     onSelectTool('select');
+  };
+
+  // Handle single-click on Arrow tool - select tool and use last/default arrow type
+  const handleArrowClick = () => {
+    if (arrowClickTimerRef.current) {
+      clearTimeout(arrowClickTimerRef.current);
+      arrowClickTimerRef.current = null;
+    }
+    
+    arrowClickTimerRef.current = setTimeout(() => {
+      // Activate shape tool with current arrow type (or default to 'line-arrow')
+      const arrowTypes = ['line-arrow', 'line-arrow-both', 'line-arrow-start', 
+                          'line-arrow-open', 'line-arrow-dot', 'line-arrow-diamond'];
+      if (!arrowTypes.includes(selectedShapeType)) {
+        onSelectShapeType('line-arrow');
+      }
+      onSelectTool('shape');
+      arrowClickTimerRef.current = null;
+    }, 250);
+  };
+
+  // Handle double-click on Arrow tool - open dropdown menu
+  const handleArrowDoubleClick = () => {
+    if (arrowClickTimerRef.current) {
+      clearTimeout(arrowClickTimerRef.current);
+      arrowClickTimerRef.current = null;
+    }
+    
+    onSelectTool('shape');
+    setShowArrowMenu(!showArrowMenu);
   };
 
   return (
@@ -276,10 +310,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <div className="relative" ref={arrowMenuRef}>
           <button
             id="tool-quick-line-arrow"
-            onClick={() => {
-              onSelectTool('shape');
-              setShowArrowMenu(!showArrowMenu);
-            }}
+            onClick={handleArrowClick}
+            onDoubleClick={handleArrowDoubleClick}
             className={`flex items-center gap-0.5 p-2 rounded-md transition-colors ${
               currentTool === 'shape' &&
               [
@@ -293,7 +325,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
                 : 'text-stone-300 hover:text-white hover:bg-stone-800'
             }`}
-            title="화살표 선 그리기 (길게 눌러 종류 선택)"
+            title="화살표 선 그리기 (더블클릭: 종류 선택)"
             aria-label="화살표 선 종류"
           >
             {selectedShapeType === 'line-arrow-both' && (
@@ -651,7 +683,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           }`}
           title="화면 캡처 (Crop) - 드래그 후 Ctrl+C로 캡처 복사, Ctrl+V로 붙여넣기 (C)"
         >
-          <Camera className="w-4 h-4" />
+          <Crop className="w-4 h-4" />
         </button>
 
         {/* Radial Object Tool — create radial arrays of objects */}

@@ -198,7 +198,8 @@ export function getShapePath(
   shapeType: ShapeType,
   width: number,
   height: number,
-  cornerRadius = 16
+  cornerRadius = 16,
+  strokeWidth = 2
 ): string {
   const w = Math.max(width, 1);
   const h = Math.max(height, 1);
@@ -344,7 +345,8 @@ export function getShapePath(
 
     case 'line-arrow': {
       // Line with clean arrowhead at end
-      const headSize = Math.min(14, Math.max(8, w * 0.2));
+      const baseSize = Math.min(14, Math.max(8, w * 0.2));
+      const headSize = baseSize * (strokeWidth / 2);
       return `
         M 0 ${h / 2}
         L ${w} ${h / 2}
@@ -356,7 +358,8 @@ export function getShapePath(
 
     case 'line-arrow-both': {
       // Line with arrowheads at both ends
-      const headSize = Math.min(14, Math.max(8, w * 0.2));
+      const baseSize = Math.min(14, Math.max(8, w * 0.2));
+      const headSize = baseSize * (strokeWidth / 2);
       return `
         M 0 ${h / 2}
         L ${w} ${h / 2}
@@ -371,7 +374,8 @@ export function getShapePath(
 
     case 'line-arrow-start': {
       // Line with arrowhead at start
-      const headSize = Math.min(14, Math.max(8, w * 0.2));
+      const baseSize = Math.min(14, Math.max(8, w * 0.2));
+      const headSize = baseSize * (strokeWidth / 2);
       return `
         M 0 ${h / 2}
         L ${w} ${h / 2}
@@ -383,7 +387,8 @@ export function getShapePath(
 
     case 'line-arrow-open': {
       // Line with open arrowhead (V shape) at end
-      const headSize = Math.min(14, Math.max(8, w * 0.2));
+      const baseSize = Math.min(14, Math.max(8, w * 0.2));
+      const headSize = baseSize * (strokeWidth / 2);
       return `
         M 0 ${h / 2}
         L ${w} ${h / 2}
@@ -395,7 +400,8 @@ export function getShapePath(
 
     case 'line-arrow-dot': {
       // Line with dot at end
-      const dotR = Math.min(6, Math.max(3, w * 0.08));
+      const baseR = Math.min(6, Math.max(3, w * 0.08));
+      const dotR = baseR * (strokeWidth / 2);
       return `
         M 0 ${h / 2}
         L ${w - dotR} ${h / 2}
@@ -408,7 +414,8 @@ export function getShapePath(
 
     case 'line-arrow-diamond': {
       // Line with diamond at end
-      const d = Math.min(12, Math.max(6, w * 0.15));
+      const baseD = Math.min(12, Math.max(6, w * 0.15));
+      const d = baseD * (strokeWidth / 2);
       return `
         M 0 ${h / 2}
         L ${w - d} ${h / 2}

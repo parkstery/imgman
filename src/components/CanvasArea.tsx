@@ -645,6 +645,26 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     if (selectedElementIds.length !== 1) return null;
     if (!selectedElement || selectedElement.type !== 'shape') return null;
     if (selectedElement.shapeType !== 'line' && !selectedElement.shapeType.startsWith('line-arrow')) return null;
+    
+    // PowerPoint-style: use points if available
+    if (selectedElement.points && selectedElement.points.length >= 2) {
+      const rad = ((selectedElement.rotation || 0) * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      
+      // Transform points from element-local to canvas coordinates
+      const p0 = selectedElement.points[0];
+      const p1 = selectedElement.points[selectedElement.points.length - 1];
+      
+      const sx = selectedElement.x + p0.x * cos - p0.y * sin;
+      const sy = selectedElement.y + p0.x * sin + p0.y * cos;
+      const ex = selectedElement.x + p1.x * cos - p1.y * sin;
+      const ey = selectedElement.y + p1.x * sin + p1.y * cos;
+      
+      return { start: { x: sx, y: sy }, end: { x: ex, y: ey } };
+    }
+    
+    // Legacy: use width-based calculation
     const sx = selectedElement.x;
     const sy = selectedElement.y + selectedElement.height / 2;
     const rad = ((selectedElement.rotation || 0) * Math.PI) / 180;
@@ -1344,7 +1364,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const liveOpts = { skipHistory: true } as const;
       transformDirtyRef.current = true;
 
-      // Specialized Line Start Point handle drag
+      // Specialized Line Start Point handle drag - PowerPoint style
       if (activeHandle === 'line-start' && transformStart.lineEnd) {
         const fixedEnd = transformStart.lineEnd;
         let curPt = pt;
@@ -1352,35 +1372,48 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           curPt = { x: snapValue(curPt.x), y: snapValue(curPt.y) };
         }
         if (e.shiftKey) {
-          const ldx = curPt.x - fixedEnd.x;
-          const ldy = curPt.y - fixedEnd.y;
-          const dist = Math.hypot(ldx, ldy);
-          const rad = Math.atan2(ldy, ldx);
-          const deg = (rad * 180) / Math.PI;
-          const snappedDeg = Math.round(deg / 45) * 45;
-          const snappedRad = (snappedDeg * Math.PI) / 180;
-          curPt = {
-            x: fixedEnd.x + Math.cos(snappedRad) * dist,
-            y: fixedEnd.y + Math.sin(snappedRad) * dist,
-          };
+          // PowerPoint-style 15-degree snap
+          curPt = getConstrainedPoint(fixedEnd.x, fixedEnd.y, curPt.x, curPt.y);
         }
-        const deltaX = fixedEnd.x - curPt.x;
-        const deltaY = fixedEnd.y - curPt.y;
-        const len = Math.hypot(deltaX, deltaY);
-        // Angle points from start (curPt) to end (fixedEnd)
-        const deg = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
-        const thickness = selectedElement.height;
-        onUpdateElement({
-          ...selectedElement,
-          x: Math.round(curPt.x),
-          y: Math.round(curPt.y - thickness / 2),
-          width: Math.max(5, Math.round(len)),
-          rotation: Math.round(deg),
-        }, liveOpts);
+        
+        // For PowerPoint-style arrows with points, update points directly
+        if (selectedElement.points && selectedElement.points.length >= 2) {
+          const deltaX = fixedEnd.x - curPt.x;
+          const deltaY = fixedEnd.y - curPt.y;
+          const len = Math.hypot(deltaX, deltaY);
+          const deg = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
+          const thickness = selectedElement.height;
+          
+          onUpdateElement({
+            ...selectedElement,
+            x: Math.round(curPt.x),
+            y: Math.round(curPt.y - thickness / 2),
+            width: Math.max(5, Math.round(len)),
+            rotation: Math.round(deg),
+            points: [
+              { x: 0, y: thickness / 2 },
+              { x: Math.round(len), y: thickness / 2 }
+            ],
+          }, liveOpts);
+        } else {
+          // Legacy width-based
+          const deltaX = fixedEnd.x - curPt.x;
+          const deltaY = fixedEnd.y - curPt.y;
+          const len = Math.hypot(deltaX, deltaY);
+          const deg = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
+          const thickness = selectedElement.height;
+          onUpdateElement({
+            ...selectedElement,
+            x: Math.round(curPt.x),
+            y: Math.round(curPt.y - thickness / 2),
+            width: Math.max(5, Math.round(len)),
+            rotation: Math.round(deg),
+          }, liveOpts);
+        }
         return;
       }
 
-      // Specialized Line End Point handle drag
+      // Specialized Line End Point handle drag - PowerPoint style
       if (activeHandle === 'line-end' && transformStart.lineStart) {
         const fixedStart = transformStart.lineStart;
         let curPt = pt;
@@ -1388,27 +1421,39 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           curPt = { x: snapValue(curPt.x), y: snapValue(curPt.y) };
         }
         if (e.shiftKey) {
-          const ldx = curPt.x - fixedStart.x;
-          const ldy = curPt.y - fixedStart.y;
-          const dist = Math.hypot(ldx, ldy);
-          const rad = Math.atan2(ldy, ldx);
-          const deg = (rad * 180) / Math.PI;
-          const snappedDeg = Math.round(deg / 45) * 45;
-          const snappedRad = (snappedDeg * Math.PI) / 180;
-          curPt = {
-            x: fixedStart.x + Math.cos(snappedRad) * dist,
-            y: fixedStart.y + Math.sin(snappedRad) * dist,
-          };
+          // PowerPoint-style 15-degree snap
+          curPt = getConstrainedPoint(fixedStart.x, fixedStart.y, curPt.x, curPt.y);
         }
-        const deltaX = curPt.x - fixedStart.x;
-        const deltaY = curPt.y - fixedStart.y;
-        const len = Math.hypot(deltaX, deltaY);
-        const deg = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
-        onUpdateElement({
-          ...selectedElement,
-          width: Math.max(5, Math.round(len)),
-          rotation: Math.round(deg),
-        }, liveOpts);
+        
+        // For PowerPoint-style arrows with points, update points directly
+        if (selectedElement.points && selectedElement.points.length >= 2) {
+          const deltaX = curPt.x - fixedStart.x;
+          const deltaY = curPt.y - fixedStart.y;
+          const len = Math.hypot(deltaX, deltaY);
+          const deg = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
+          const thickness = selectedElement.height;
+          
+          onUpdateElement({
+            ...selectedElement,
+            width: Math.max(5, Math.round(len)),
+            rotation: Math.round(deg),
+            points: [
+              { x: 0, y: thickness / 2 },
+              { x: Math.round(len), y: thickness / 2 }
+            ],
+          }, liveOpts);
+        } else {
+          // Legacy width-based
+          const deltaX = curPt.x - fixedStart.x;
+          const deltaY = curPt.y - fixedStart.y;
+          const len = Math.hypot(deltaX, deltaY);
+          const deg = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
+          onUpdateElement({
+            ...selectedElement,
+            width: Math.max(5, Math.round(len)),
+            rotation: Math.round(deg),
+          }, liveOpts);
+        }
         return;
       }
 

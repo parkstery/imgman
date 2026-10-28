@@ -4,6 +4,7 @@ import {
   getArrowHeadPath,
   getShortenedLineEndpoints,
   isArrowHeadFilled,
+  lineCapToSvg,
 } from '../utils/arrowUtils';
 
 interface ArrowLineRendererProps {
@@ -78,7 +79,7 @@ export const ArrowLineRenderer: React.FC<ArrowLineRendererProps> = ({
         y2={shortened.endY}
         stroke={el.stroke}
         strokeWidth={el.strokeWidth}
-        strokeLinecap={el.lineCap || 'round'}
+        strokeLinecap={lineCapToSvg(el.lineCap)}
         strokeDasharray={strokeDasharray}
         opacity={el.opacity}
         filter={filterAttr}

@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { FONT_FAMILIES } from '../utils/colorUtils';
 import { finalizeArcGeometry } from '../utils/shapeGenerators';
+import { getArrowPreset } from '../utils/arrowUtils';
 import {
   AlignLeft,
   AlignCenter,
@@ -413,6 +414,20 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   const isText = selectedElement.type === 'text';
   const isImage = selectedElement.type === 'image';
   const isBrush = selectedElement.type === 'brush';
+
+  /**
+   * Switching the line type must also swap the arrow heads: the renderer reads
+   * `beginArrow` / `endArrow`, so leaving the old heads in place made the type
+   * buttons look like no-ops.
+   */
+  const lineTypePatch = (type: string, name: string) => {
+    const preset = getArrowPreset(type);
+    return {
+      shapeType: type as ShapeElement['shapeType'],
+      name,
+      ...(preset ? { beginArrow: { ...preset.begin }, endArrow: { ...preset.end } } : {}),
+    };
+  };
 
   const text = isText ? (selectedElement as TextElement) : null;
   const img = isImage ? (selectedElement as ImageElement) : null;
@@ -898,8 +913,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   onClick={() =>
                     onUpdateElement({
                       ...shape,
-                      shapeType: 'line',
-                      name: '직선',
+                      ...lineTypePatch('line', '직선'),
                     })
                   }
                   className={`py-1.5 rounded border text-xs font-medium transition-colors ${
@@ -915,8 +929,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   onClick={() =>
                     onUpdateElement({
                       ...shape,
-                      shapeType: 'line-arrow',
-                      name: '끝 화살표',
+                      ...lineTypePatch('line-arrow', '끝 화살표'),
                     })
                   }
                   className={`py-1.5 rounded border text-xs font-medium transition-colors ${
@@ -932,8 +945,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   onClick={() =>
                     onUpdateElement({
                       ...shape,
-                      shapeType: 'line-arrow-both',
-                      name: '양끝 화살표',
+                      ...lineTypePatch('line-arrow-both', '양끝 화살표'),
                     })
                   }
                   className={`py-1.5 rounded border text-xs font-medium transition-colors ${

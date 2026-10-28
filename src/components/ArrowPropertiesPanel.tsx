@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ArrowType, ArrowSize, LineCap, ArrowConfig } from '../types';
-import { X } from 'lucide-react';
+import { X, CheckCheck } from 'lucide-react';
 
 interface ArrowPropertiesPanelProps {
   /** Selected arrow begin config (null if no arrow selected) */
@@ -28,6 +28,8 @@ interface ArrowPropertiesPanelProps {
   onClose: () => void;
   /** Is this for new arrow defaults (vs editing existing arrow) */
   isDefaults?: boolean;
+  /** Save the current arrow style as the default for new arrows */
+  onSaveAsDefault?: () => void;
 }
 
 const ARROW_TYPES: { value: ArrowType; label: string }[] = [
@@ -67,6 +69,7 @@ export const ArrowPropertiesPanel: React.FC<ArrowPropertiesPanelProps> = ({
   onPropertiesChange,
   onClose,
   isDefaults = false,
+  onSaveAsDefault,
 }) => {
   const handleBeginTypeChange = (type: ArrowType) => {
     onPropertiesChange({ beginArrow: { ...beginArrow, type } });
@@ -100,8 +103,15 @@ export const ArrowPropertiesPanel: React.FC<ArrowPropertiesPanelProps> = ({
     onPropertiesChange({ lineCap: cap });
   };
 
+  const [savedAsDefault, setSavedAsDefault] = useState(false);
+  const handleSaveAsDefault = () => {
+    onSaveAsDefault?.();
+    setSavedAsDefault(true);
+    window.setTimeout(() => setSavedAsDefault(false), 1600);
+  };
+
   return (
-    <div className="fixed z-[70] top-24 right-4 w-72 bg-stone-900/95 border border-stone-700 rounded-lg shadow-2xl overflow-hidden backdrop-blur-sm">
+    <div className="fixed z-[70] top-28 right-[19rem] w-72 bg-stone-900/95 border border-stone-700 rounded-lg shadow-2xl overflow-hidden backdrop-blur-sm">
       <div className="flex items-center justify-between px-3 py-2 border-b border-stone-800 bg-stone-950/80">
         <h3 className="text-sm font-semibold text-stone-200">
           {isDefaults ? '화살표 기본값 설정' : '화살표 속성'}
@@ -270,6 +280,23 @@ export const ArrowPropertiesPanel: React.FC<ArrowPropertiesPanelProps> = ({
             ))}
           </div>
         </div>
+
+        {/* Save current style as default */}
+        {onSaveAsDefault && (
+          <button
+            type="button"
+            onClick={handleSaveAsDefault}
+            className={`w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-[11px] rounded border transition-colors ${
+              savedAsDefault
+                ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                : 'border-stone-700 bg-stone-800 text-stone-300 hover:bg-stone-700 hover:text-white'
+            }`}
+            title="다음에 그리는 화살표에 이 스타일을 적용합니다"
+          >
+            <CheckCheck className="w-3.5 h-3.5" />
+            <span>{savedAsDefault ? '기본값으로 저장됨' : '이 스타일을 기본값으로 저장'}</span>
+          </button>
+        )}
       </div>
     </div>
   );

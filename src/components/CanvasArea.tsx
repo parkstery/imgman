@@ -23,6 +23,7 @@ import {
   getShortenedLineEndpoints,
   isArrowHeadFilled,
   getConstrainedPoint,
+  resolveArrowConfig,
 } from '../utils/arrowUtils';
 import type { ArrowConfig, ArrowType, ArrowSize } from '../types';
 import { ArrowLineRenderer } from './ArrowLineRenderer';
@@ -281,6 +282,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
   // Line drawing preview state (start to current)
   const [linePreviewEnd, setLinePreviewEnd] = useState<Point | null>(null);
+  // Mirrors linePreviewEnd for the mouseup handler: state may lag one frame on
+  // fast drags, which used to truncate the finished line.
+  const linePreviewEndRef = useRef<Point | null>(null);
+
+  const updateLinePreviewEnd = useCallback((pt: Point | null) => {
+    linePreviewEndRef.current = pt;
+    setLinePreviewEnd(pt);
+  }, []);
 
   // Arrow properties panel state
   const [showArrowProperties, setShowArrowProperties] = useState(false);
@@ -664,17 +673,22 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const rad = ((selectedElement.rotation || 0) * Math.PI) / 180;
       const cos = Math.cos(rad);
       const sin = Math.sin(rad);
-      
-      // Transform points from element-local to canvas coordinates
+      // Lines rotate around their start point (0, height/2), not the bbox corner
+      const pivotX = 0;
+      const pivotY = selectedElement.height / 2;
+
+      const toCanvas = (p: { x: number; y: number }) => {
+        const lx = p.x - pivotX;
+        const ly = p.y - pivotY;
+        return {
+          x: selectedElement.x + pivotX + lx * cos - ly * sin,
+          y: selectedElement.y + pivotY + lx * sin + ly * cos,
+        };
+      };
+
       const p0 = selectedElement.points[0];
       const p1 = selectedElement.points[selectedElement.points.length - 1];
-      
-      const sx = selectedElement.x + p0.x * cos - p0.y * sin;
-      const sy = selectedElement.y + p0.x * sin + p0.y * cos;
-      const ex = selectedElement.x + p1.x * cos - p1.y * sin;
-      const ey = selectedElement.y + p1.x * sin + p1.y * cos;
-      
-      return { start: { x: sx, y: sy }, end: { x: ex, y: ey } };
+      return { start: toCanvas(p0), end: toCanvas(p1) };
     }
     
     // Legacy: use width-based calculation
@@ -966,8 +980,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       setIsDrawing(true);
       setDrawStart(startPt);
 
-      if (selectedShapeType === 'line' || selectedShapeType === 'line-arrow') {
-        setLinePreviewEnd(startPt);
+      if (selectedShapeType === 'line' || selectedShapeType.startsWith('line-arrow')) {
+        updateLinePreviewEnd(startPt);
       } else {
         setPreviewRect({ x: startPt.x, y: startPt.y, w: 0, h: 0 });
       }
@@ -1342,6 +1356,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         targetPt = getConstrainedPoint(drawStart.x, drawStart.y, targetPt.x, targetPt.y);
       }
       setLinePreviewEnd(targetPt);
+      linePreviewEndRef.current = targetPt;
       return;
     }
 
@@ -1744,7 +1759,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       currentTool === 'shape' &&
       (selectedShapeType === 'line' || selectedShapeType.startsWith('line-arrow'))
     ) {
-      let endPt = linePreviewEnd || drawStart;
+      let endPt = linePreviewEndRef.current || linePreviewEnd || drawStart;
       let startX = drawStart.x;
       let startY = drawStart.y;
       let endX = endPt.x;
@@ -1768,26 +1783,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const thickness = Math.max(strokeW * 4, 16);
       const lineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
 
-      // Map shapeType to PowerPoint-style arrow configuration - use defaults from arrowDefaults
-      let beginArrow: ArrowConfig = arrowDefaults.beginArrow;
-      let endArrow: ArrowConfig = arrowDefaults.endArrow;
-      
-      if (selectedShapeType.startsWith('line-arrow')) {
-        if (selectedShapeType === 'line-arrow') {
-          endArrow = { type: 'triangle', size: 'medium' };
-        } else if (selectedShapeType === 'line-arrow-both') {
-          beginArrow = { type: 'triangle', size: 'medium' };
-          endArrow = { type: 'triangle', size: 'medium' };
-        } else if (selectedShapeType === 'line-arrow-start') {
-          beginArrow = { type: 'triangle', size: 'medium' };
-        } else if (selectedShapeType === 'line-arrow-open') {
-          endArrow = { type: 'open', size: 'medium' };
-        } else if (selectedShapeType === 'line-arrow-dot') {
-          endArrow = { type: 'oval', size: 'medium' };
-        } else if (selectedShapeType === 'line-arrow-diamond') {
-          endArrow = { type: 'diamond', size: 'medium' };
-        }
-      }
+      // Map shapeType to PowerPoint-style arrow configuration.
+      // Presets declare both ends explicitly, so a straight line can never
+      // inherit the triangle head from the previous arrow.
+      const resolvedArrows = resolveArrowConfig(selectedShapeType, arrowDefaults);
+      const beginArrow: ArrowConfig = resolvedArrows.begin;
+      const endArrow: ArrowConfig = resolvedArrows.end;
 
       const arrowNameMap: Record<string, string> = {
         'line-arrow': '끝 화살표',
@@ -1827,8 +1828,20 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
       onAddElement(newLineShape);
       onSelectElement(newLineShape.id);
+      // Remember the style of the freshly drawn arrow (PowerPoint behaviour):
+      // the next single-click arrow reuses these heads.
+      if (selectedShapeType.startsWith('line-arrow')) {
+        setArrowDefaults((prev) => ({
+          ...prev,
+          beginArrow,
+          endArrow,
+          strokeWidth: strokeW,
+          strokeDash: newLineShape.strokeDash,
+          lineCap: newLineShape.lineCap || prev.lineCap,
+        }));
+      }
       // NOTE: Do NOT automatically switch to 'select' mode! Allow continuous drawing.
-      setLinePreviewEnd(null);
+      updateLinePreviewEnd(null);
       setIsDrawing(false);
     }
 
@@ -2978,26 +2991,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             const activeLineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
             const activeStrokeW = (lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0) ? lastShapeStyle.strokeWidth : (strokeWidth || 2);
             
-            // Map shapeType to arrow configuration for preview - use defaults if available
-            let beginArrow = arrowDefaults.beginArrow;
-            let endArrow = arrowDefaults.endArrow;
-            
-            if (selectedShapeType.startsWith('line-arrow')) {
-              if (selectedShapeType === 'line-arrow') {
-                endArrow = { type: 'triangle', size: 'medium' };
-              } else if (selectedShapeType === 'line-arrow-both') {
-                beginArrow = { type: 'triangle', size: 'medium' };
-                endArrow = { type: 'triangle', size: 'medium' };
-              } else if (selectedShapeType === 'line-arrow-start') {
-                beginArrow = { type: 'triangle', size: 'medium' };
-              } else if (selectedShapeType === 'line-arrow-open') {
-                endArrow = { type: 'open', size: 'medium' };
-              } else if (selectedShapeType === 'line-arrow-dot') {
-                endArrow = { type: 'oval', size: 'medium' };
-              } else if (selectedShapeType === 'line-arrow-diamond') {
-                endArrow = { type: 'diamond', size: 'medium' };
-              }
-            }
+            // Resolve the same arrow configuration the finished line will use
+            const previewArrows = resolveArrowConfig(selectedShapeType, arrowDefaults);
+            const beginArrow = previewArrows.begin;
+            const endArrow = previewArrows.end;
             
             // Calculate length and create preview element for ArrowLineRenderer
             const dx = linePreviewEnd.x - drawStart.x;
@@ -3833,6 +3830,16 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           onPropertiesChange={handleArrowPropertiesChange}
           onClose={() => setShowArrowProperties(false)}
           isDefaults={false}
+          onSaveAsDefault={() => {
+            if (!selectedElement || selectedElement.type !== 'shape') return;
+            handleArrowDefaultsChange({
+              beginArrow: selectedElement.beginArrow,
+              endArrow: selectedElement.endArrow,
+              strokeWidth: selectedElement.strokeWidth,
+              strokeDash: selectedElement.strokeDash,
+              lineCap: selectedElement.lineCap || 'round',
+            });
+          }}
         />
       )}
 

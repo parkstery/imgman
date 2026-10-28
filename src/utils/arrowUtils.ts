@@ -1,4 +1,68 @@
-import { ArrowType, ArrowSize, Point } from '../types';
+import { ArrowType, ArrowSize, ArrowConfig, LineCap, Point } from '../types';
+
+/** No arrow head (used for either end of a plain line). */
+export const NO_ARROW: ArrowConfig = { type: 'none', size: 'medium' };
+
+/** Shorthand for building an arrow head configuration. */
+export function makeArrow(type: ArrowType, size: ArrowSize = 'medium'): ArrowConfig {
+  return { type, size };
+}
+
+/**
+ * PowerPoint-style presets for the toolbar / properties panel.
+ * Every preset declares BOTH ends explicitly so that the previous
+ * default arrow heads can never leak into the new line.
+ */
+const ARROW_PRESETS: Record<string, { begin: ArrowConfig; end: ArrowConfig }> = {
+  line: { begin: makeArrow('none'), end: makeArrow('none') },
+  'line-arrow': { begin: makeArrow('none'), end: makeArrow('triangle') },
+  'line-arrow-both': { begin: makeArrow('triangle'), end: makeArrow('triangle') },
+  'line-arrow-start': { begin: makeArrow('triangle'), end: makeArrow('none') },
+  'line-arrow-open': { begin: makeArrow('none'), end: makeArrow('open') },
+  'line-arrow-dot': { begin: makeArrow('none'), end: makeArrow('oval') },
+  'line-arrow-diamond': { begin: makeArrow('none'), end: makeArrow('diamond') },
+};
+
+/** Explicit begin/end configuration for a known line preset (null otherwise). */
+export function getArrowPreset(shapeType: string): { begin: ArrowConfig; end: ArrowConfig } | null {
+  return ARROW_PRESETS[shapeType] || null;
+}
+
+/**
+ * Resolve the begin/end arrow heads for a line that is about to be drawn.
+ *
+ * - `line`           → no heads at all
+ * - `line-arrow`     → remembers the last used arrow style (PowerPoint behaviour)
+ * - concrete presets → their fixed configuration
+ */
+export function resolveArrowConfig(
+  shapeType: string,
+  defaults: { beginArrow: ArrowConfig; endArrow: ArrowConfig }
+): { begin: ArrowConfig; end: ArrowConfig } {
+  if (shapeType === 'line') return { begin: { ...NO_ARROW }, end: { ...NO_ARROW } };
+  if (shapeType === 'line-arrow') {
+    return { begin: { ...defaults.beginArrow }, end: { ...defaults.endArrow } };
+  }
+  const preset = getArrowPreset(shapeType);
+  return preset
+    ? { begin: { ...preset.begin }, end: { ...preset.end } }
+    : { begin: { ...NO_ARROW }, end: { ...NO_ARROW } };
+}
+
+/** Translate the UI line cap value into a valid SVG `stroke-linecap` value. */
+export function lineCapToSvg(cap?: LineCap): 'butt' | 'round' | 'square' {
+  if (cap === 'flat') return 'butt';
+  if (cap === 'square') return 'square';
+  return 'round';
+}
+
+/**
+ * Whether the arrow head covers the shaft (the shaft must be shortened).
+ * An open V head is drawn on top of the line tip, so the shaft keeps its length.
+ */
+export function arrowConsumesShaft(type: ArrowType): boolean {
+  return type !== 'none' && type !== 'open';
+}
 
 /**
  * Get arrow size multipliers based on size setting
@@ -121,12 +185,16 @@ export function getShortenedLineEndpoints(
   const unitY = dy / length;
   
   // Shorten from start
-  const beginLength = getArrowHeadLength(strokeWidth, beginArrowType, beginArrowSize);
+  const beginLength = arrowConsumesShaft(beginArrowType)
+    ? getArrowHeadLength(strokeWidth, beginArrowType, beginArrowSize)
+    : 0;
   const newStartX = startX + unitX * beginLength;
   const newStartY = startY + unitY * beginLength;
-  
+
   // Shorten from end
-  const endLength = getArrowHeadLength(strokeWidth, endArrowType, endArrowSize);
+  const endLength = arrowConsumesShaft(endArrowType)
+    ? getArrowHeadLength(strokeWidth, endArrowType, endArrowSize)
+    : 0;
   const newEndX = endX - unitX * endLength;
   const newEndY = endY - unitY * endLength;
   

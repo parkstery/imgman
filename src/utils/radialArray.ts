@@ -4,6 +4,7 @@ import {
   RadialToolState,
 } from '../types';
 import { getRotationPivot } from './elementGeometry';
+import { remapGroupIds } from './cloneElements';
 
 export { getRotationPivot } from './elementGeometry';
 
@@ -84,7 +85,7 @@ export function buildRadialPreview(
         ? theta - state.startAngle
         : 0;
 
-    return sourceOffsets.map((offset, srcIndex) => {
+    const copies = sourceOffsets.map((offset, srcIndex) => {
       // Position this element's pivot at the circle radius
       const cr = Math.cos((groupRot * Math.PI) / 180);
       const sr = Math.sin((groupRot * Math.PI) / 180);
@@ -126,5 +127,6 @@ export function buildRadialPreview(
       }
       return copy;
     });
+    return remapGroupIds(copies, `radial-${i}`);
   });
 }

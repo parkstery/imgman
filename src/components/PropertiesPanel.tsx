@@ -86,6 +86,9 @@ interface PropertiesPanelProps {
   onDuplicateElement: (element: CanvasElement) => void;
   onCreateMirrorAxis?: (axis: 'h' | 'v') => void;
   onDeleteElement: (id: string) => void;
+  isElementLocked?: boolean;
+  isLayerLocked?: boolean;
+  onToggleElementLock?: () => void;
   onBringForward: (id: string) => void;
   onSendBackward: (id: string) => void;
   onBringToFront: (id: string) => void;
@@ -126,6 +129,9 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   onDuplicateElement,
   onCreateMirrorAxis,
   onDeleteElement,
+  isElementLocked = false,
+  isLayerLocked = false,
+  onToggleElementLock,
   onBringForward,
   onSendBackward,
   onBringToFront,
@@ -457,6 +463,25 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             </button>
           )}
           <button
+            id="btn-lock-elem"
+            onClick={() => onToggleElementLock?.()}
+            disabled={isLayerLocked}
+            className={`p-1.5 rounded ${
+              isElementLocked
+                ? 'text-amber-400 hover:text-amber-300 hover:bg-stone-800'
+                : 'text-stone-400 hover:text-white hover:bg-stone-800'
+            } ${isLayerLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title={
+              isLayerLocked
+                ? '레이어가 잠겨 있습니다. 레이어 잠금을 해제하세요.'
+                : isElementLocked
+                  ? '객체 잠금 해제'
+                  : '객체 잠금'
+            }
+          >
+            {isElementLocked ? <Lock className="w-3.5 h-3.5" /> : <LockOpen className="w-3.5 h-3.5" />}
+          </button>
+          <button
             id="btn-duplicate-elem"
             onClick={() => onDuplicateElement(selectedElement)}
             className="p-1.5 rounded text-stone-400 hover:text-white hover:bg-stone-800"
@@ -467,8 +492,13 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
           <button
             id="btn-delete-elem"
             onClick={() => onDeleteElement(selectedElement.id)}
-            className="p-1.5 rounded text-stone-400 hover:text-rose-400 hover:bg-stone-800"
-            title="삭제 (Del)"
+            disabled={isElementLocked}
+            className={`p-1.5 rounded ${
+              isElementLocked
+                ? 'text-stone-700 cursor-not-allowed'
+                : 'text-stone-400 hover:text-rose-400 hover:bg-stone-800'
+            }`}
+            title={isElementLocked ? '잠긴 객체는 삭제할 수 없습니다' : '삭제 (Del)'}
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>

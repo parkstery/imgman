@@ -108,6 +108,37 @@ export function getArrowHeadLength(
   }
 }
 
+/** Line direction in degrees (atan2), start → end. */
+export function getLineAngleDeg(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number
+): number {
+  return Math.atan2(endY - startY, endX - startX) * (180 / Math.PI);
+}
+
+/**
+ * SVG `rotate()` for a right-pointing head from `getArrowHeadPath`.
+ * Begin must face opposite the line so the tip points away from the shaft.
+ */
+export function getArrowHeadRotateDeg(lineAngleDeg: number, at: 'begin' | 'end'): number {
+  return at === 'begin' ? lineAngleDeg + 180 : lineAngleDeg;
+}
+
+/** Local start/end of a straight arrow line (points, else width-based fallback). */
+export function resolveArrowLinePoints(
+  width: number,
+  height: number,
+  points?: Point[]
+): { start: Point; end: Point } {
+  const hasPoints = !!(points && points.length >= 2);
+  return {
+    start: hasPoints ? points![0] : { x: 0, y: height / 2 },
+    end: hasPoints ? points![points!.length - 1] : { x: width, y: height / 2 },
+  };
+}
+
 /**
  * Generate SVG path for arrow head
  * Arrow is centered at origin, pointing right (+x direction)

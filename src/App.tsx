@@ -31,6 +31,23 @@ import {
   removeImageBackground,
 } from './utils/imageEdit';
 import { buildRadialPreview, normalizeAngle } from './utils/radialArray';
+import { useDocumentHistory } from './hooks/useDocumentHistory';
+import { recallDocument, rememberDocument } from './utils/documentSession';
+import { validateProjectData, formatProjectErrors } from './utils/projectSchema';
+import {
+  canApplyElementMutation,
+  canDeleteLayer,
+  canEditElement,
+  canEditLayer,
+  elementsRemainingAfterClear,
+  filterEditableElements,
+  isLayerLocked,
+} from './utils/lockGuards';
+import { cloneElements, remapRadialInstanceGroups } from './utils/cloneElements';
+import {
+  shouldBlockDocumentPaste,
+  shouldBlockDocumentShortcut,
+} from './utils/documentShortcuts';
 
 const INITIAL_CONFIG: CanvasConfig = {
   width: 1280,
@@ -70,12 +87,25 @@ const INITIAL_ELEMENTS: CanvasElement[] = [];
 /** Offset when pasting / duplicating objects (right + down) */
 const PASTE_OFFSET_PX = 10;
 
+function initialSnapshot() {
+  const recalled = recallDocument();
+  if (recalled) return recalled;
+  return {
+    elements: INITIAL_ELEMENTS,
+    layers: INITIAL_LAYERS,
+    activeLayerId: INITIAL_LAYERS[0].id,
+    canvasConfig: INITIAL_CONFIG,
+  };
+}
+
 export default function App() {
+  const recovered = useMemo(() => initialSnapshot(), []);
+
   // State
-  const [config, setConfig] = useState<CanvasConfig>(INITIAL_CONFIG);
-  const [layers, setLayers] = useState<Layer[]>(INITIAL_LAYERS);
-  const [activeLayerId, setActiveLayerId] = useState<string>(INITIAL_LAYERS[0].id);
-  const [elements, setElements] = useState<CanvasElement[]>(INITIAL_ELEMENTS);
+  const [config, setConfig] = useState<CanvasConfig>(recovered.canvasConfig);
+  const [layers, setLayers] = useState<Layer[]>(recovered.layers);
+  const [activeLayerId, setActiveLayerId] = useState<string>(recovered.activeLayerId);
+  const [elements, setElements] = useState<CanvasElement[]>(recovered.elements);
 
   // Multi-element selection state
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
@@ -97,6 +127,8 @@ export default function App() {
   const [primaryColor, setPrimaryColor] = useState<string>('#FF0000');
   const [strokeWidth, setStrokeWidth] = useState<number>(2);
   const [zoom, setZoom] = useState<number>(0.9);
+  const [zoomFitActive, setZoomFitActive] = useState(false);
+  const [fitNonce, setFitNonce] = useState(0);
 
   // Modals
   const [isExportOpen, setIsExportOpen] = useState(false);
@@ -184,10 +216,12 @@ export default function App() {
   );
 
   const handleStartCropImage = useCallback((id: string) => {
+    const target = elementsRef.current.find((el) => el.id === id);
+    if (target && !canEditElement(target, layers)) return;
     setCroppingImageId(id);
     setSelectedElementIds([id]);
     setCurrentTool('select');
-  }, []);
+  }, [layers]);
 
   const handleFinishCropImage = useCallback(() => {
     setCroppingImageId(null);
@@ -450,42 +484,55 @@ export default function App() {
   ]);
 
 
-  // History for Undo / Redo
-  const [history, setHistory] = useState<HistorySnapshot[]>([
-    {
-      elements: INITIAL_ELEMENTS,
-      layers: INITIAL_LAYERS,
-      activeLayerId: INITIAL_LAYERS[0].id,
-      canvasConfig: INITIAL_CONFIG,
-    },
-  ]);
-  const [historyIndex, setHistoryIndex] = useState<number>(0);
-  const isHistoryActionRef = useRef(false);
+  // History for Undo / Redo (commit always records; undo/redo never skip the next edit)
+  const {
+    canUndo,
+    canRedo,
+    commit: commitHistorySnapshot,
+    undo: undoHistorySnapshot,
+    redo: redoHistorySnapshot,
+    reset: resetHistorySnapshot,
+  } = useDocumentHistory(recovered);
 
-  // Push new snapshot to history
   const pushHistory = useCallback(
-    (newElements: CanvasElement[], newLayers: Layer[], newConfig: CanvasConfig) => {
-      if (isHistoryActionRef.current) {
-        isHistoryActionRef.current = false;
-        return;
-      }
-      setHistory((prev) => {
-        const sliced = prev.slice(0, historyIndex + 1);
-        const newSnap: HistorySnapshot = {
-          elements: newElements,
-          layers: newLayers,
-          activeLayerId,
-          canvasConfig: newConfig,
-        };
-        // Keep up to 30 snapshots
-        const updated = [...sliced, newSnap];
-        if (updated.length > 30) updated.shift();
-        return updated;
-      });
-      setHistoryIndex((prev) => Math.min(prev + 1, 29));
+    (
+      newElements: CanvasElement[],
+      newLayers: Layer[],
+      newConfig: CanvasConfig,
+      nextActiveLayerId?: string
+    ) => {
+      const snapshot: HistorySnapshot = {
+        elements: newElements,
+        layers: newLayers,
+        activeLayerId: nextActiveLayerId ?? activeLayerId,
+        canvasConfig: newConfig,
+      };
+      commitHistorySnapshot(snapshot);
     },
-    [historyIndex, activeLayerId]
+    [commitHistorySnapshot, activeLayerId]
   );
+
+  const applySnapshot = useCallback((snap: HistorySnapshot) => {
+    setElements(snap.elements);
+    elementsRef.current = snap.elements;
+    setLayers(snap.layers);
+    setActiveLayerId(snap.activeLayerId);
+    setConfig(snap.canvasConfig);
+    rememberDocument(snap);
+    setSelectedElementIds((prev) =>
+      prev.filter((id) => snap.elements.some((el) => el.id === id))
+    );
+    setCroppingImageId((prev) => {
+      if (prev && !snap.elements.some((el) => el.id === prev)) {
+        return null;
+      }
+      return prev;
+    });
+    if (croppingImageId && !snap.elements.some((el) => el.id === croppingImageId)) {
+      setActiveImgCropBox(null);
+      activeImgCropBoxRef.current = null;
+    }
+  }, [croppingImageId]);
 
   /**
    * Turn the preview copies into real elements.
@@ -498,7 +545,18 @@ export default function App() {
       return;
     }
     const stamp = Date.now();
-    const newElements = previewElements.map((el, i) => ({
+    const sourceCount =
+      sourceElements && sourceElements.length > 0
+        ? sourceElements.length
+        : sourceElement
+          ? 1
+          : 1;
+    const remapped = remapRadialInstanceGroups(
+      previewElements,
+      sourceCount,
+      `radial-commit-${stamp}`
+    );
+    const newElements = remapped.map((el, i) => ({
       ...el,
       id: `radial-${stamp}-${i}`,
       name: el.name.replace(/\s*\(방사상.*\)$/, ''),
@@ -507,11 +565,12 @@ export default function App() {
     const nextElements = hideSource && sourceElement
       ? [
           ...elements.map((el) => {
-            // If source was part of a group, hide all group members
-            if (sourceElement.groupId && el.groupId === sourceElement.groupId) {
-              return { ...el, visible: false };
-            }
-            return el.id === sourceElement.id ? { ...el, visible: false } : el;
+            const hideTarget =
+              (sourceElement.groupId && el.groupId === sourceElement.groupId) ||
+              el.id === sourceElement.id;
+            if (!hideTarget) return el;
+            if (!canEditElement(el, layers)) return el;
+            return { ...el, visible: false };
           }),
           ...newElements,
         ]
@@ -533,29 +592,15 @@ export default function App() {
 
   // Undo Handler
   const handleUndo = useCallback(() => {
-    if (historyIndex > 0) {
-      isHistoryActionRef.current = true;
-      const targetSnap = history[historyIndex - 1];
-      setElements(targetSnap.elements);
-      setLayers(targetSnap.layers);
-      setActiveLayerId(targetSnap.activeLayerId);
-      setConfig(targetSnap.canvasConfig);
-      setHistoryIndex((prev) => prev - 1);
-    }
-  }, [historyIndex, history]);
+    const snap = undoHistorySnapshot();
+    if (snap) applySnapshot(snap);
+  }, [undoHistorySnapshot, applySnapshot]);
 
   // Redo Handler
   const handleRedo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      isHistoryActionRef.current = true;
-      const targetSnap = history[historyIndex + 1];
-      setElements(targetSnap.elements);
-      setLayers(targetSnap.layers);
-      setActiveLayerId(targetSnap.activeLayerId);
-      setConfig(targetSnap.canvasConfig);
-      setHistoryIndex((prev) => prev + 1);
-    }
-  }, [historyIndex, history]);
+    const snap = redoHistorySnapshot();
+    if (snap) applySnapshot(snap);
+  }, [redoHistorySnapshot, applySnapshot]);
 
   // Selection handlers ??sync selected object's color/style for subsequent drawing
   const handleSelectElement = useCallback(
@@ -668,19 +713,30 @@ export default function App() {
     });
   }, []);
 
-  // Clear Canvas
+  // Clear Canvas — locked objects and objects on locked layers are kept
   const handleClearCanvas = () => {
     if (window.confirm('캔버스의 모든 요소를 비우시겠습니까?')) {
-      const nextElements: CanvasElement[] = [];
+      const nextElements = elementsRemainingAfterClear(elements, layers);
       setElements(nextElements);
-      setSelectedElementIds([]);
+      elementsRef.current = nextElements;
+      setSelectedElementIds((prev) =>
+        prev.filter((id) => nextElements.some((el) => el.id === id))
+      );
       pushHistory(nextElements, layers, config);
+      const removed = elements.length - nextElements.length;
+      if (removed === 0 && elements.length > 0) {
+        showToast('잠긴 객체는 지우지 않았습니다.');
+      } else if (nextElements.length > 0) {
+        showToast(`잠긴 객체 ${nextElements.length}개는 그대로 두었습니다.`);
+      }
     }
   };
 
   // Add Element
   const handleAddElement = useCallback(
     (newElem: CanvasElement) => {
+      const targetLayer = layers.find((l) => l.id === newElem.layerId);
+      if (!canEditLayer(targetLayer)) return;
       const next = [...elements, newElem];
       setElements(next);
       if (newElem.type === 'shape') {
@@ -743,7 +799,11 @@ export default function App() {
   // Update Element (skipHistory: live drag/resize — commit once on mouse up)
   const handleUpdateElement = useCallback(
     (updated: CanvasElement, options?: { skipHistory?: boolean }) => {
-      const next = elements.map((el) => (el.id === updated.id ? updated : el));
+      const existing = elementsRef.current.find((el) => el.id === updated.id);
+      if (existing && !canApplyElementMutation(existing, updated, layers)) {
+        return;
+      }
+      const next = elementsRef.current.map((el) => (el.id === updated.id ? updated : el));
       elementsRef.current = next;
       setElements(next);
       // Feature 5: Keep style persistent for future shapes & lines
@@ -801,7 +861,7 @@ export default function App() {
         pushHistory(next, layers, config);
       }
     },
-    [elements, layers, config, pushHistory]
+    [layers, config, pushHistory]
   );
 
   // Batch-update multiple elements in one commit (group move / multi-edit)
@@ -809,14 +869,17 @@ export default function App() {
     (updatedList: CanvasElement[], options?: { skipHistory?: boolean }) => {
       if (updatedList.length === 0) return;
       const map = new Map(updatedList.map((u) => [u.id, u]));
-      setElements((prev) => {
-        const next = prev.map((el) => map.get(el.id) ?? el);
-        elementsRef.current = next;
-        if (!options?.skipHistory) {
-          pushHistory(next, layers, config);
-        }
-        return next;
+      const next = elementsRef.current.map((el) => {
+        const updated = map.get(el.id);
+        if (!updated) return el;
+        if (!canApplyElementMutation(el, updated, layers)) return el;
+        return updated;
       });
+      elementsRef.current = next;
+      setElements(next);
+      if (!options?.skipHistory) {
+        pushHistory(next, layers, config);
+      }
     },
     [layers, config, pushHistory]
   );
@@ -863,8 +926,11 @@ export default function App() {
   // Delete Element (single or multiple)
   const handleDeleteElement = useCallback(
     (id: string) => {
+      const target = elements.find((el) => el.id === id);
+      if (target && !canEditElement(target, layers)) return;
       const next = elements.filter((el) => el.id !== id);
       setElements(next);
+      elementsRef.current = next;
       setSelectedElementIds((prev) => prev.filter((item) => item !== id));
       pushHistory(next, layers, config);
     },
@@ -873,24 +939,31 @@ export default function App() {
 
   const handleDeleteSelectedElements = useCallback(() => {
     if (selectedElementIds.length === 0) return;
-    const next = elements.filter((el) => !selectedElementIds.includes(el.id));
+    const removable = new Set(
+      filterEditableElements(
+        elements.filter((el) => selectedElementIds.includes(el.id)),
+        layers
+      ).map((el) => el.id)
+    );
+    if (removable.size === 0) return;
+    const next = elements.filter((el) => !removable.has(el.id));
     setElements(next);
-    setSelectedElementIds([]);
+    elementsRef.current = next;
+    setSelectedElementIds((prev) => prev.filter((id) => !removable.has(id)));
     pushHistory(next, layers, config);
   }, [elements, selectedElementIds, layers, config, pushHistory]);
 
   // Duplicate Element (single or multiple)
   const handleDuplicateElement = useCallback(
     (el: CanvasElement) => {
-      const dup: CanvasElement = {
-        ...el,
-        id: `${el.type}-${Date.now()}`,
-        x: el.x + PASTE_OFFSET_PX,
-        y: el.y + PASTE_OFFSET_PX,
-        name: `${el.name || el.type} (복제)`,
-      };
+      const [dup] = cloneElements([el], {
+        offsetX: PASTE_OFFSET_PX,
+        offsetY: PASTE_OFFSET_PX,
+        nameSuffix: ' (복제)',
+      });
       const next = [...elements, dup];
       setElements(next);
+      elementsRef.current = next;
       setSelectedElementIds([dup.id]);
       pushHistory(next, layers, config);
     },
@@ -903,15 +976,13 @@ export default function App() {
     (axis: 'h' | 'v') => {
       const source = elements.find((el) => selectedElementIds.includes(el.id));
       if (!source) return;
-      const mirrored: CanvasElement = {
-        ...JSON.parse(JSON.stringify(source)),
-        id: `${source.type}-mirror-${Date.now()}`,
-        name: `${source.name || source.type} (거울상)`,
-        flipH: axis === 'h' ? !(source.flipH ?? false) : (source.flipH ?? false),
-        flipV: axis === 'v' ? !(source.flipV ?? false) : (source.flipV ?? false),
-        x: axis === 'h' ? source.x + source.width : source.x,
-        y: axis === 'v' ? source.y + source.height : source.y,
-      };
+      const [mirrored] = cloneElements([source], {
+        offsetX: axis === 'h' ? source.width : 0,
+        offsetY: axis === 'v' ? source.height : 0,
+        nameSuffix: ' (거울상)',
+      });
+      mirrored.flipH = axis === 'h' ? !(source.flipH ?? false) : (source.flipH ?? false);
+      mirrored.flipV = axis === 'v' ? !(source.flipV ?? false) : (source.flipV ?? false);
       const next = [...elements, mirrored];
       setElements(next);
       setSelectedElementIds([mirrored.id]);
@@ -928,15 +999,15 @@ export default function App() {
   const handleDuplicateSelectedElements = useCallback(() => {
     if (selectedElementIds.length === 0) return;
     const toDuplicate = elements.filter((el) => selectedElementIds.includes(el.id));
-    const newItems: CanvasElement[] = toDuplicate.map((el, i) => ({
-      ...el,
-      id: `${el.type}-${Date.now()}-${i}`,
-      x: el.x + PASTE_OFFSET_PX,
-      y: el.y + PASTE_OFFSET_PX,
-      name: `${el.name || el.type} (복제)`,
-    }));
+    if (toDuplicate.length === 0) return;
+    const newItems = cloneElements(toDuplicate, {
+      offsetX: PASTE_OFFSET_PX,
+      offsetY: PASTE_OFFSET_PX,
+      nameSuffix: ' (복제)',
+    });
     const next = [...elements, ...newItems];
     setElements(next);
+    elementsRef.current = next;
     setSelectedElementIds(newItems.map((item) => item.id));
     pushHistory(next, layers, config);
   }, [elements, selectedElementIds, layers, config, pushHistory]);
@@ -1073,6 +1144,7 @@ export default function App() {
         const punchById = new Map<string, Promise<ImageElement>>();
 
         for (const el of elements) {
+          const editable = canEditElement(el, layers);
           const elRight = el.x + el.width;
           const elBottom = el.y + el.height;
           const isFullyInside =
@@ -1082,9 +1154,12 @@ export default function App() {
             elBottom <= regBottom;
 
           // Fully inside -> remove (contents already captured in the slice)
-          if (isFullyInside) continue;
+          if (isFullyInside) {
+            if (!editable) keptSlots.push(el);
+            continue;
+          }
 
-          if (el.type === 'image') {
+          if (el.type === 'image' && editable) {
             const local = getImageLocalIntersection(el, region);
             if (local) {
               punchById.set(el.id, punchHoleInImageElement(el, local));
@@ -1173,7 +1248,10 @@ export default function App() {
   // Cut (오려내기/잘라내기) Selected Canvas Elements (Ctrl+X)
   const handleCutSelectedElements = useCallback(() => {
     if (selectedElementIds.length === 0) return;
-    const selected = elements.filter((el) => selectedElementIds.includes(el.id));
+    const selected = filterEditableElements(
+      elements.filter((el) => selectedElementIds.includes(el.id)),
+      layers
+    );
     if (selected.length === 0) return;
 
     internalClipboardRef.current = {
@@ -1186,16 +1264,19 @@ export default function App() {
     lastWrittenPngSizeRef.current = null;
     handleDeleteSelectedElements();
     showToast(`${selected.length}개 객체를 잘라냈습니다. (Ctrl+V로 붙여넣기)`);
-  }, [elements, selectedElementIds, handleDeleteSelectedElements, showToast]);
+  }, [elements, selectedElementIds, layers, handleDeleteSelectedElements, showToast]);
 
   // Background removal: color-key from the border, clear matched pixels to transparent.
   const handleRemoveImageBackground = useCallback(
     async (imgElem: ImageElement, tolerance: number) => {
+      if (!canEditElement(imgElem, layers)) return;
       try {
         showToast('배경을 제거하는 중...');
         const { element: next, removedPct } = await removeImageBackground(imgElem, tolerance);
-        setElements((prev) => prev.map((el) => (el.id === imgElem.id ? next : el)));
-        pushHistory(elements.map((el) => (el.id === imgElem.id ? next : el)), layers, config);
+        const nextElements = elementsRef.current.map((el) => (el.id === imgElem.id ? next : el));
+        elementsRef.current = nextElements;
+        setElements(nextElements);
+        pushHistory(nextElements, layers, config);
         setSelectedElementIds([imgElem.id]);
         showToast(`배경을 제거했습니다. (픽셀 ${removedPct}% 지움) 경계가 거칠면 허용치를 조정해 다시 적용하세요.`);
       } catch (err) {
@@ -1247,6 +1328,7 @@ export default function App() {
   const handleCutImagePart = useCallback(
     async (imgElem: ImageElement, crop: { x: number; y: number; w: number; h: number }) => {
       if (crop.w < 5 || crop.h < 5) return;
+      if (!canEditElement(imgElem, layers)) return;
       try {
         const [slice, punched] = await Promise.all([
           extractImageSlice(imgElem, crop),
@@ -1277,11 +1359,10 @@ export default function App() {
           await writeImageBlobToSystemClipboard(sliceBlob);
         }
 
-        setElements((prev) => {
-          const next = prev.map((el) => (el.id === imgElem.id ? punched : el));
-          pushHistory(next, layers, config);
-          return next;
-        });
+        const next = elementsRef.current.map((el) => (el.id === imgElem.id ? punched : el));
+        elementsRef.current = next;
+        setElements(next);
+        pushHistory(next, layers, config);
         setSelectedElementIds([imgElem.id]);
         setCroppingImageId(null);
         setCurrentTool('select');
@@ -1298,6 +1379,7 @@ export default function App() {
   const handleBringForward = useCallback(
     (id: string) => {
       const idx = elements.findIndex((el) => el.id === id);
+      if (idx < 0 || !canEditElement(elements[idx], layers)) return;
       if (idx < elements.length - 1) {
         const next = [...elements];
         const temp = next[idx];
@@ -1313,6 +1395,7 @@ export default function App() {
   const handleSendBackward = useCallback(
     (id: string) => {
       const idx = elements.findIndex((el) => el.id === id);
+      if (idx < 0 || !canEditElement(elements[idx], layers)) return;
       if (idx > 0) {
         const next = [...elements];
         const temp = next[idx];
@@ -1328,7 +1411,7 @@ export default function App() {
   const handleBringToFront = useCallback(
     (id: string) => {
       const target = elements.find((el) => el.id === id);
-      if (target) {
+      if (target && canEditElement(target, layers)) {
         const next = elements.filter((el) => el.id !== id).concat(target);
         setElements(next);
         pushHistory(next, layers, config);
@@ -1340,7 +1423,7 @@ export default function App() {
   const handleSendToBack = useCallback(
     (id: string) => {
       const target = elements.find((el) => el.id === id);
-      if (target) {
+      if (target && canEditElement(target, layers)) {
         const next = [target].concat(elements.filter((el) => el.id !== id));
         setElements(next);
         pushHistory(next, layers, config);
@@ -1391,6 +1474,11 @@ export default function App() {
       showToast('그룹화할 객체를 2개 이상 선택하세요.');
       return;
     }
+    const selected = elements.filter((el) => selectedElementIds.includes(el.id));
+    if (selected.some((el) => !canEditElement(el, layers))) {
+      showToast('잠긴 객체는 그룹화할 수 없습니다.');
+      return;
+    }
     const groupId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const nextElements = elements.map((el) =>
       selectedElementIds.includes(el.id) ? { ...el, groupId } : el
@@ -1403,6 +1491,11 @@ export default function App() {
   const handleUngroup = useCallback(() => {
     if (selectedElementIds.length === 0) {
       showToast('해제할 그룹을 선택하세요.');
+      return;
+    }
+    const selected = elements.filter((el) => selectedElementIds.includes(el.id));
+    if (selected.some((el) => !canEditElement(el, layers))) {
+      showToast('잠긴 객체는 그룹 해제할 수 없습니다.');
       return;
     }
     // Find all groupIds among selected elements
@@ -1427,13 +1520,11 @@ export default function App() {
   // Update Config
   const handleUpdateConfig = useCallback(
     (partial: Partial<CanvasConfig>) => {
-      setConfig((prev) => {
-        const next = { ...prev, ...partial };
-        pushHistory(elements, layers, next);
-        return next;
-      });
+      const next = { ...config, ...partial };
+      setConfig(next);
+      pushHistory(elements, layers, next);
     },
-    [elements, layers, pushHistory]
+    [config, elements, layers, pushHistory]
   );
 
   // New document: apply the chosen canvas and drop every object from the previous one.
@@ -1464,17 +1555,14 @@ export default function App() {
       activeImgCropBoxRef.current = null;
       activeCanvasCropBoxRef.current = null;
       setConfig(nextConfig);
-      setHistory([
-        {
-          elements: nextElements,
-          layers: nextLayers,
-          activeLayerId: nextLayers[0].id,
-          canvasConfig: nextConfig,
-        },
-      ]);
-      setHistoryIndex(0);
+      resetHistorySnapshot({
+        elements: nextElements,
+        layers: nextLayers,
+        activeLayerId: nextLayers[0].id,
+        canvasConfig: nextConfig,
+      });
     },
-    [config]
+    [config, resetHistorySnapshot]
   );
 
   // Layers Handlers
@@ -1489,20 +1577,27 @@ export default function App() {
     const nextLayers = [...layers, newLayer];
     setLayers(nextLayers);
     setActiveLayerId(newLayer.id);
-    pushHistory(elements, nextLayers, config);
+    pushHistory(elements, nextLayers, config, newLayer.id);
   };
 
   const handleDeleteLayer = (layerId: string) => {
-    if (layers.length <= 1) return;
+    const target = layers.find((l) => l.id === layerId);
+    if (!canDeleteLayer(target, layers.length, elements)) {
+      if (target && elements.some((el) => el.layerId === target.id && el.locked)) {
+        showToast('잠긴 객체가 있는 레이어는 삭제할 수 없습니다.');
+      }
+      return;
+    }
     const nextLayers = layers.filter((l) => l.id !== layerId);
     const nextElements = elements.filter((el) => el.layerId !== layerId);
     setLayers(nextLayers);
     setElements(nextElements);
-    setActiveLayerId(nextLayers[nextLayers.length - 1].id);
+    const nextActive = nextLayers[nextLayers.length - 1].id;
+    setActiveLayerId(nextActive);
     if (selectedElementId && !nextElements.some((e) => e.id === selectedElementId)) {
       handleSelectElement(null);
     }
-    pushHistory(nextElements, nextLayers, config);
+    pushHistory(nextElements, nextLayers, config, nextActive);
   };
 
   const handleDuplicateLayer = (layerId: string) => {
@@ -1518,20 +1613,18 @@ export default function App() {
 
     // Duplicate all elements belonging to this layer
     const layerElems = elements.filter((el) => el.layerId === layerId);
-    const dupElems = layerElems.map((el) => ({
-      ...el,
-      id: `${el.type}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    const dupElems = cloneElements(layerElems, {
+      offsetX: 15,
+      offsetY: 15,
       layerId: newLayerId,
-      x: el.x + 15,
-      y: el.y + 15,
-    }));
+    });
 
     const nextLayers = [...layers, newLayer];
     const nextElements = [...elements, ...dupElems];
     setLayers(nextLayers);
     setElements(nextElements);
     setActiveLayerId(newLayerId);
-    pushHistory(nextElements, nextLayers, config);
+    pushHistory(nextElements, nextLayers, config, newLayerId);
   };
 
   const handleMoveLayerUp = (layerId: string) => {
@@ -1563,6 +1656,7 @@ export default function App() {
     (elementId: string) => {
       const idx = elements.findIndex((el) => el.id === elementId);
       if (idx < 0) return;
+      if (!canEditElement(elements[idx], layers)) return;
       const layerId = elements[idx].layerId;
       let swapWith = -1;
       for (let i = idx + 1; i < elements.length; i++) {
@@ -1587,6 +1681,7 @@ export default function App() {
     (elementId: string) => {
       const idx = elements.findIndex((el) => el.id === elementId);
       if (idx < 0) return;
+      if (!canEditElement(elements[idx], layers)) return;
       const layerId = elements[idx].layerId;
       let swapWith = -1;
       for (let i = idx - 1; i >= 0; i--) {
@@ -1637,6 +1732,11 @@ export default function App() {
         x = Math.min(Math.max(0, x), Math.max(0, config.width - width));
         y = Math.min(Math.max(0, y), Math.max(0, config.height - height));
 
+        const targetLayer = layers.find((l) => l.id === (activeLayerId || layers[0]?.id));
+        if (!canEditLayer(targetLayer)) {
+          showToast('잠긴 레이어에는 이미지를 넣을 수 없습니다.');
+          return;
+        }
         const newImgElem: ImageElement = {
           id: 'image-' + Date.now(),
           layerId: activeLayerId || layers[0]?.id || 'layer-default',
@@ -1661,11 +1761,10 @@ export default function App() {
           },
         };
 
-        setElements((prev) => {
-          const next = [...prev, newImgElem];
-          pushHistory(next, layers, config);
-          return next;
-        });
+        const next = [...elementsRef.current, newImgElem];
+        elementsRef.current = next;
+        setElements(next);
+        pushHistory(next, layers, config);
         setSelectedElementIds([newImgElem.id]);
         setCurrentTool('select');
         showToast('클립보드 이미지를 캔버스에 붙여넣었습니다.');
@@ -1698,6 +1797,12 @@ export default function App() {
   const pasteFromInternalClipboard = useCallback((): boolean => {
     const clip = internalClipboardRef.current;
     if (!clip) return false;
+
+    const targetLayer = layers.find((l) => l.id === activeLayerId);
+    if (!canEditLayer(targetLayer)) {
+      showToast('잠긴 레이어에는 붙여넣을 수 없습니다.');
+      return true;
+    }
 
     if (clip.type === 'image-slice' && clip.imageSlice) {
       const slice = clip.imageSlice;
@@ -1733,11 +1838,10 @@ export default function App() {
       slice.suggestedX = targetX + PASTE_OFFSET_PX;
       slice.suggestedY = targetY + PASTE_OFFSET_PX;
 
-      setElements((prev) => {
-        const next = [...prev, newImg];
-        pushHistory(next, layers, config);
-        return next;
-      });
+      const next = [...elementsRef.current, newImg];
+      elementsRef.current = next;
+      setElements(next);
+      pushHistory(next, layers, config);
       setSelectedElementIds([newImg.id]);
       setCurrentTool('select');
       showToast('클립보드 이미지를 붙여넣었습니다.');
@@ -1745,39 +1849,18 @@ export default function App() {
     }
 
     if (clip.type === 'elements' && clip.elements) {
-      const cloned = clip.elements.map((el, i) => {
-        const newId = `${el.type}-${Date.now()}-${i}`;
-        const nextX = el.x + PASTE_OFFSET_PX;
-        const nextY = el.y + PASTE_OFFSET_PX;
-        if (el.type === 'brush' && el.points) {
-          return {
-            ...el,
-            id: newId,
-            layerId: activeLayerId,
-            x: nextX,
-            y: nextY,
-            points: el.points.map((p) => ({
-              x: p.x + PASTE_OFFSET_PX,
-              y: p.y + PASTE_OFFSET_PX,
-            })),
-          };
-        }
-        return {
-          ...el,
-          id: newId,
-          layerId: activeLayerId,
-          x: nextX,
-          y: nextY,
-        };
+      const cloned = cloneElements(clip.elements, {
+        offsetX: PASTE_OFFSET_PX,
+        offsetY: PASTE_OFFSET_PX,
+        layerId: activeLayerId,
       });
 
       clip.elements = cloned;
 
-      setElements((prev) => {
-        const next = [...prev, ...cloned];
-        pushHistory(next, layers, config);
-        return next;
-      });
+      const next = [...elementsRef.current, ...cloned];
+      elementsRef.current = next;
+      setElements(next);
+      pushHistory(next, layers, config);
       setSelectedElementIds(cloned.map((c) => c.id));
       setCurrentTool('select');
       showToast(`${cloned.length}개 객체를 붙여넣었습니다.`);
@@ -1871,6 +1954,14 @@ export default function App() {
 
     const handlePaste = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement;
+      // Clipboard guide owns paste; do not preventDefault so the zone can receive it.
+      if (isClipboardGuideOpen) return;
+      const modalOpen = isExportOpen || isShortcutsOpen || isNewCanvasOpen;
+      if (shouldBlockDocumentPaste({ modalOpen, target })) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (
         target &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
@@ -1948,7 +2039,15 @@ export default function App() {
     return () => {
       document.removeEventListener('paste', handlePaste, true);
     };
-  }, [handleInsertImage, handleInsertImageSrc, pasteFromInternalClipboard]);
+  }, [
+    handleInsertImage,
+    handleInsertImageSrc,
+    pasteFromInternalClipboard,
+    isExportOpen,
+    isShortcutsOpen,
+    isNewCanvasOpen,
+    isClipboardGuideOpen,
+  ]);
 
   // Save Project as JSON
   const handleSaveProject = () => {
@@ -1977,19 +2076,32 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const data = JSON.parse(e.target?.result as string);
-        if (data && data.config && data.layers && data.elements) {
-          setConfig(data.config);
-          setLayers(data.layers);
-          setActiveLayerId(data.layers[0]?.id || 'layer-1');
-          setElements(data.elements);
-          setSelectedElementIds([]);
-          pushHistory(data.elements, data.layers, data.config);
-        } else {
-          alert('올바른 프로젝트 JSON 파일이 아닙니다.');
+        const parsed = JSON.parse(e.target?.result as string);
+        const result = validateProjectData(parsed);
+        if (result.ok === false) {
+          showToast(formatProjectErrors(result.errors));
+          return;
         }
+        const { config: nextConfig, layers: nextLayers, elements: nextElements } = result.data;
+        const nextActive = nextLayers[0].id;
+        setConfig(nextConfig);
+        setLayers(nextLayers);
+        setActiveLayerId(nextActive);
+        setElements(nextElements);
+        elementsRef.current = nextElements;
+        setSelectedElementIds([]);
+        setCroppingImageId(null);
+        setActiveImgCropBox(null);
+        activeImgCropBoxRef.current = null;
+        resetHistorySnapshot({
+          elements: nextElements,
+          layers: nextLayers,
+          activeLayerId: nextActive,
+          canvasConfig: nextConfig,
+        });
+        showToast('프로젝트를 불러왔습니다.');
       } catch (err) {
-        alert('파일을 불러오는 중 오류가 발생했습니다.');
+        showToast('파일을 불러오는 중 오류가 발생했습니다. 현재 문서는 그대로 둡니다.');
       }
     };
     reader.readAsText(file);
@@ -2010,10 +2122,10 @@ export default function App() {
 
       // Immediately update selected element if any
       if (selectedElementIds.length > 0) {
-        setElements((prevElements) => {
-          let hasChanges = false;
-          const next = prevElements.map((el) => {
+        let hasChanges = false;
+        const next = elements.map((el) => {
             if (!selectedElementIds.includes(el.id)) return el;
+            if (!canEditElement(el, layers)) return el;
             hasChanges = true;
             if (el.type === 'shape') {
               const isLineShape =
@@ -2037,14 +2149,14 @@ export default function App() {
             }
             return el;
           });
-          if (hasChanges) {
-            pushHistory(next, layers, config);
-          }
-          return next;
-        });
+        if (hasChanges) {
+          setElements(next);
+          elementsRef.current = next;
+          pushHistory(next, layers, config);
+        }
       }
     },
-    [selectedElementIds, layers, config, pushHistory]
+    [selectedElementIds, elements, layers, config, pushHistory]
   );
 
   const handleStrokeWidthChange = useCallback(
@@ -2053,32 +2165,32 @@ export default function App() {
       setLastShapeStyle((prev) => ({ ...prev, strokeWidth: w }));
 
       if (selectedElementIds.length > 0) {
-        setElements((prevElements) => {
-          let hasChanges = false;
-          const next = prevElements.map((el) => {
-            if (!selectedElementIds.includes(el.id)) return el;
-            hasChanges = true;
-            if (el.type === 'shape') {
-              const isStraightLine =
-                el.shapeType === 'line' || el.shapeType.startsWith('line-arrow');
-              return {
-                ...el,
-                strokeWidth: w,
-                height: isStraightLine ? Math.max(w * 4, 16) : el.height,
-              };
-            } else if (el.type === 'brush') {
-              return { ...el, strokeWidth: w };
-            }
-            return el;
-          });
-          if (hasChanges) {
-            pushHistory(next, layers, config);
+        let hasChanges = false;
+        const next = elements.map((el) => {
+          if (!selectedElementIds.includes(el.id)) return el;
+          if (!canEditElement(el, layers)) return el;
+          hasChanges = true;
+          if (el.type === 'shape') {
+            const isStraightLine =
+              el.shapeType === 'line' || el.shapeType.startsWith('line-arrow');
+            return {
+              ...el,
+              strokeWidth: w,
+              height: isStraightLine ? Math.max(w * 4, 16) : el.height,
+            };
+          } else if (el.type === 'brush') {
+            return { ...el, strokeWidth: w };
           }
-          return next;
+          return el;
         });
+        if (hasChanges) {
+          setElements(next);
+          elementsRef.current = next;
+          pushHistory(next, layers, config);
+        }
       }
     },
-    [selectedElementIds, layers, config, pushHistory]
+    [selectedElementIds, elements, layers, config, pushHistory]
   );
 
   // Keyboard Nudge logic (Arrow keys for 1px, Shift + Arrow for 10px)
@@ -2089,71 +2201,87 @@ export default function App() {
     (dx: number, dy: number) => {
       if (selectedElementIds.length === 0) return;
 
-      if (!isNudgingRef.current) {
-        isNudgingRef.current = true;
-      }
+      let changed = false;
+      const nextElements = elementsRef.current.map((el) => {
+        if (!selectedElementIds.includes(el.id)) return el;
+        if (!canEditElement(el, layers)) return el;
 
-      setElements((prevElements) => {
-        let changed = false;
-        const nextElements = prevElements.map((el) => {
-          if (!selectedElementIds.includes(el.id)) return el;
-          if (el.locked) return el;
-          const layer = layers.find((l) => l.id === el.layerId);
-          if (layer && layer.locked) return el;
+        changed = true;
+        const nextX = Math.round(el.x + dx);
+        const nextY = Math.round(el.y + dy);
 
-          changed = true;
-          const nextX = Math.round(el.x + dx);
-          const nextY = Math.round(el.y + dy);
-
-          if (el.type === 'brush' && el.points) {
-            return {
-              ...el,
-              x: nextX,
-              y: nextY,
-              points: el.points.map((p) => ({
-                x: Math.round(p.x + dx),
-                y: Math.round(p.y + dy),
-              })),
-            };
-          }
-
+        if (el.type === 'brush' && el.points) {
           return {
             ...el,
             x: nextX,
             y: nextY,
+            points: el.points.map((p) => ({
+              x: Math.round(p.x + dx),
+              y: Math.round(p.y + dy),
+            })),
           };
-        });
-
-        if (!changed) return prevElements;
-
-        if (nudgeTimerRef.current) {
-          clearTimeout(nudgeTimerRef.current);
         }
-        nudgeTimerRef.current = setTimeout(() => {
-          if (isNudgingRef.current) {
-            pushHistory(nextElements, layers, config);
-            isNudgingRef.current = false;
-          }
-          nudgeTimerRef.current = null;
-        }, 400);
 
-        return nextElements;
+        return {
+          ...el,
+          x: nextX,
+          y: nextY,
+        };
       });
+
+      if (!changed) return;
+      elementsRef.current = nextElements;
+      setElements(nextElements);
+
+      if (!isNudgingRef.current) {
+        isNudgingRef.current = true;
+      }
+      if (nudgeTimerRef.current) {
+        clearTimeout(nudgeTimerRef.current);
+      }
+      nudgeTimerRef.current = setTimeout(() => {
+        if (isNudgingRef.current) {
+          pushHistory(elementsRef.current, layers, config);
+          isNudgingRef.current = false;
+        }
+        nudgeTimerRef.current = null;
+      }, 400);
     },
     [selectedElementIds, layers, config, pushHistory]
   );
 
+  const handleHeaderZoomChange = useCallback((z: number) => {
+    setZoomFitActive(false);
+    setZoom(z);
+  }, []);
+
+  const handleCanvasZoomChange = useCallback((z: number, source: 'fit' | 'user' = 'user') => {
+    setZoom(z);
+    setZoomFitActive(source === 'fit');
+  }, []);
+
+  const handleZoomFit = useCallback(() => {
+    setZoomFitActive(true);
+    setFitNonce((n) => n + 1);
+  }, []);
+
+  const handleZoom100 = useCallback(() => {
+    setZoomFitActive(false);
+    setZoom(1);
+  }, []);
+
+  const isAnyModalOpen =
+    isExportOpen || isShortcutsOpen || isNewCanvasOpen || isClipboardGuideOpen;
+
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger shortcuts when typing inside an input/textarea
       const target = e.target as HTMLElement;
       if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.isContentEditable)
+        shouldBlockDocumentShortcut({
+          modalOpen: isAnyModalOpen,
+          target,
+        })
       ) {
         return;
       }
@@ -2410,6 +2538,7 @@ export default function App() {
     radialToolState.step,
     handleRadialConfirm,
     handleRadialCancel,
+    isAnyModalOpen,
   ]);
 
   const selectedElement = elements.find((el) => el.id === selectedElementId) || null;
@@ -2429,15 +2558,15 @@ export default function App() {
       <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-visible">
       {/* 1. Header Navigation Bar */}
       <HeaderNavbar
-        canUndo={historyIndex > 0}
-        canRedo={historyIndex < history.length - 1}
+        canUndo={canUndo}
+        canRedo={canRedo}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onClear={handleClearCanvas}
         zoom={zoom}
-        onZoomChange={setZoom}
-        onZoomFit={() => setZoom(0.85)}
-        onZoom100={() => setZoom(1)}
+        onZoomChange={handleHeaderZoomChange}
+        onZoomFit={handleZoomFit}
+        onZoom100={handleZoom100}
         config={config}
         onUpdateConfig={handleUpdateConfig}
         onOpenNewCanvas={() => setIsNewCanvasOpen(true)}
@@ -2525,7 +2654,10 @@ export default function App() {
             onPrimaryColorChange={handlePrimaryColorChange}
             strokeWidth={strokeWidth}
             zoom={zoom}
-            onZoomChange={setZoom}
+            onZoomChange={handleCanvasZoomChange}
+            zoomFitActive={zoomFitActive}
+            fitNonce={fitNonce}
+            documentInputEnabled={!isAnyModalOpen}
             lastShapeStyle={lastShapeStyle}
             croppingImageId={croppingImageId}
             onStartCropImage={handleStartCropImage}
@@ -2552,6 +2684,20 @@ export default function App() {
           onDuplicateElement={handleDuplicateElement}
           onCreateMirrorAxis={handleCreateMirrorElement}
           onDeleteElement={handleDeleteElement}
+          isElementLocked={
+            selectedElement ? !canEditElement(selectedElement, layers) : false
+          }
+          isLayerLocked={
+            selectedElement ? isLayerLocked(layers, selectedElement.layerId) : false
+          }
+          onToggleElementLock={() => {
+            if (!selectedElement) return;
+            if (isLayerLocked(layers, selectedElement.layerId)) return;
+            handleUpdateElement({
+              ...selectedElement,
+              locked: !selectedElement.locked,
+            });
+          }}
           onBringForward={handleBringForward}
           onSendBackward={handleSendBackward}
           onBringToFront={handleBringToFront}

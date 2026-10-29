@@ -2,9 +2,12 @@ import React from 'react';
 import type { ShapeElement } from '../types';
 import {
   getArrowHeadPath,
+  getArrowHeadRotateDeg,
+  getLineAngleDeg,
   getShortenedLineEndpoints,
   isArrowHeadFilled,
   lineCapToSvg,
+  resolveArrowLinePoints,
 } from '../utils/arrowUtils';
 
 interface ArrowLineRendererProps {
@@ -27,9 +30,11 @@ export const ArrowLineRenderer: React.FC<ArrowLineRendererProps> = ({
   currentTool,
 }) => {
   // Use points if available (new PowerPoint-style), otherwise fall back to width-based
-  const hasPoints = el.points && el.points.length >= 2;
-  const startPoint = hasPoints ? el.points[0] : { x: 0, y: el.height / 2 };
-  const endPoint = hasPoints ? el.points[el.points.length - 1] : { x: el.width, y: el.height / 2 };
+  const { start: startPoint, end: endPoint } = resolveArrowLinePoints(
+    el.width,
+    el.height,
+    el.points
+  );
   
   // Get arrow configurations (with defaults for backward compatibility)
   const beginArrow = el.beginArrow || { type: 'none', size: 'medium' };
@@ -48,10 +53,10 @@ export const ArrowLineRenderer: React.FC<ArrowLineRendererProps> = ({
     endArrow.size
   );
   
-  // Calculate angle for arrow heads
-  const dx = endPoint.x - startPoint.x;
-  const dy = endPoint.y - startPoint.y;
-  const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+  // Right-pointing heads: begin faces opposite the line so it is not disconnected
+  const angle = getLineAngleDeg(startPoint.x, startPoint.y, endPoint.x, endPoint.y);
+  const beginRotate = getArrowHeadRotateDeg(angle, 'begin');
+  const endRotate = getArrowHeadRotateDeg(angle, 'end');
   
   // Stroke dash pattern
   const strokeDasharray =
@@ -90,7 +95,7 @@ export const ArrowLineRenderer: React.FC<ArrowLineRendererProps> = ({
       {beginArrow.type !== 'none' && (
         <path
           d={getArrowHeadPath(el.strokeWidth, beginArrow.type, beginArrow.size)}
-          transform={`translate(${startPoint.x}, ${startPoint.y}) rotate(${angle})`}
+          transform={`translate(${startPoint.x}, ${startPoint.y}) rotate(${beginRotate})`}
           fill={isArrowHeadFilled(beginArrow.type) ? el.stroke : 'none'}
           stroke={el.stroke}
           strokeWidth={isArrowHeadFilled(beginArrow.type) ? 0 : el.strokeWidth}
@@ -106,7 +111,7 @@ export const ArrowLineRenderer: React.FC<ArrowLineRendererProps> = ({
       {endArrow.type !== 'none' && (
         <path
           d={getArrowHeadPath(el.strokeWidth, endArrow.type, endArrow.size)}
-          transform={`translate(${endPoint.x}, ${endPoint.y}) rotate(${angle})`}
+          transform={`translate(${endPoint.x}, ${endPoint.y}) rotate(${endRotate})`}
           fill={isArrowHeadFilled(endArrow.type) ? el.stroke : 'none'}
           stroke={el.stroke}
           strokeWidth={isArrowHeadFilled(endArrow.type) ? 0 : el.strokeWidth}

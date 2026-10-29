@@ -11,6 +11,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { PNG } from 'pngjs';
 import { generateSVGString, SVGExportOptions, analyzeSVGSize } from '../src/utils/svgExport';
 import {
+  getArrowHeadRotateDeg,
+  getLineAngleDeg,
+  getShortenedLineEndpoints,
+  resolveArrowLinePoints,
+} from '../src/utils/arrowUtils';
+import {
   traceImageDataToFragment,
   createImagetracerRasterTracer,
   resolveVectorizeOptions,
@@ -421,6 +427,132 @@ if (countPathsInMarkup(samplePaths) !== 2) {
   console.error('  countPathsInMarkup failed');
 } else {
   console.log('  countPathsInMarkup OK');
+}
+
+console.log('\n=== Arrow head orientation (begin opposite end) ===\n');
+try {
+  const normDeg = (a: number) => ((a % 360) + 360) % 360;
+  const isOppositeDeg = (a: number, b: number, eps = 1e-6) => {
+    const d = Math.abs(normDeg(a) - normDeg(b));
+    return Math.abs(Math.min(d, 360 - d) - 180) < eps;
+  };
+  const parseHeadTransforms = (svg: string) => {
+    const re =
+      /<path[^>]*\stransform="translate\(([^,]+),\s*([^)]+)\) rotate\(([^)]+)\)"/g;
+    const heads: { x: number; y: number; rotate: number }[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(svg))) {
+      heads.push({ x: Number(m[1]), y: Number(m[2]), rotate: Number(m[3]) });
+    }
+    return heads;
+  };
+
+  const orientations: Array<{
+    name: string;
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+  }> = [
+    { name: 'horizontal', start: { x: 0, y: 2 }, end: { x: 100, y: 2 } },
+    { name: 'diagonal', start: { x: 0, y: 0 }, end: { x: 80, y: 80 } },
+    { name: 'reversed', start: { x: 100, y: 2 }, end: { x: 0, y: 2 } },
+    { name: 'reversed-diagonal', start: { x: 80, y: 80 }, end: { x: 0, y: 0 } },
+  ];
+
+  for (const { name, start, end } of orientations) {
+    const angle = getLineAngleDeg(start.x, start.y, end.x, end.y);
+    const beginRotate = getArrowHeadRotateDeg(angle, 'begin');
+    const endRotate = getArrowHeadRotateDeg(angle, 'end');
+    if (endRotate !== angle) {
+      throw new Error(`${name}: end rotate must equal line angle (${endRotate} vs ${angle})`);
+    }
+    if (beginRotate !== angle + 180) {
+      throw new Error(`${name}: begin rotate must be angle+180 (${beginRotate} vs ${angle + 180})`);
+    }
+    if (!isOppositeDeg(beginRotate, endRotate)) {
+      throw new Error(`${name}: begin ${beginRotate} is not opposite end ${endRotate}`);
+    }
+
+    const resolved = resolveArrowLinePoints(100, 4, [start, end]);
+    if (resolved.start.x !== start.x || resolved.start.y !== start.y) {
+      throw new Error(`${name}: resolveArrowLinePoints moved start`);
+    }
+    if (resolved.end.x !== end.x || resolved.end.y !== end.y) {
+      throw new Error(`${name}: resolveArrowLinePoints moved end`);
+    }
+
+    const shortened = getShortenedLineEndpoints(
+      start.x,
+      start.y,
+      end.x,
+      end.y,
+      2,
+      'triangle',
+      'medium',
+      'triangle',
+      'medium'
+    );
+    const el = makeShape({
+      id: `arrow-${name}`,
+      name: `arrow-${name}`,
+      shapeType: 'line-arrow-both',
+      fill: 'none',
+      stroke: '#111111',
+      strokeWidth: 2,
+      width: 100,
+      height: 80,
+      x: 10,
+      y: 20,
+      beginArrow: { type: 'triangle', size: 'medium' },
+      endArrow: { type: 'triangle', size: 'medium' },
+      points: [start, end],
+    });
+    const svg = generateSVGString(layers, [el], config, { precision: 1 });
+    const heads = parseHeadTransforms(svg);
+    if (heads.length !== 2) {
+      throw new Error(`${name}: expected 2 exported heads, got ${heads.length}\n${svg}`);
+    }
+    const beginHead = heads.find(
+      (h) => Math.abs(h.x - start.x) < 0.05 && Math.abs(h.y - start.y) < 0.05
+    );
+    const endHead = heads.find(
+      (h) => Math.abs(h.x - end.x) < 0.05 && Math.abs(h.y - end.y) < 0.05
+    );
+    if (!beginHead) throw new Error(`${name}: missing begin head at ${start.x},${start.y}`);
+    if (!endHead) throw new Error(`${name}: missing end head at ${end.x},${end.y}`);
+    if (Math.abs(beginHead.rotate - beginRotate) > 0.05) {
+      throw new Error(`${name}: export begin rotate ${beginHead.rotate} != ${beginRotate}`);
+    }
+    if (Math.abs(endHead.rotate - endRotate) > 0.05) {
+      throw new Error(`${name}: export end rotate ${endHead.rotate} != ${endRotate}`);
+    }
+    if (!isOppositeDeg(beginHead.rotate, endHead.rotate, 0.05)) {
+      throw new Error(
+        `${name}: exported heads not opposite (${beginHead.rotate} vs ${endHead.rotate})`
+      );
+    }
+    const lineMatch = svg.match(
+      /<line x1="([^"]+)" y1="([^"]+)" x2="([^"]+)" y2="([^"]+)"/
+    );
+    if (!lineMatch) throw new Error(`${name}: missing exported shaft <line>`);
+    const shaft = {
+      x1: Number(lineMatch[1]),
+      y1: Number(lineMatch[2]),
+      x2: Number(lineMatch[3]),
+      y2: Number(lineMatch[4]),
+    };
+    if (Math.abs(shaft.x1 - shortened.startX) > 0.05 || Math.abs(shaft.y1 - shortened.startY) > 0.05) {
+      throw new Error(`${name}: shaft start moved`);
+    }
+    if (Math.abs(shaft.x2 - shortened.endX) > 0.05 || Math.abs(shaft.y2 - shortened.endY) > 0.05) {
+      throw new Error(`${name}: shaft end moved`);
+    }
+    console.log(
+      `  ${name}: begin=${beginRotate} end=${endRotate} opposite, endpoints preserved OK`
+    );
+  }
+} catch (e) {
+  console.error('  ARROW ORIENTATION FAILED:', e);
+  failed += 1;
 }
 
 if (failed > 0) {

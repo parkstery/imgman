@@ -394,70 +394,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           )}
         </div>
 
-        <button
-          id="tool-quick-polyline"
-          onClick={() => {
-            onSelectShapeType('polyline');
-            onSelectTool('shape');
-          }}
-          className={`p-2 rounded-md transition-colors ${
-            currentTool === 'shape' && selectedShapeType === 'polyline'
-              ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
-              : 'text-stone-300 hover:text-white hover:bg-stone-800'
-          }`}
-          title="연속 선그리기 — 클릭으로 노드 연결, 더블클릭/Enter로 완료, Esc 취소 (Shift=각도 스냅)"
-        >
-          <Waypoints className="w-4 h-4" />
-        </button>
-
-        <button
-          id="tool-quick-arc"
-          onClick={() => {
-            onSelectShapeType('arc');
-            onSelectTool('shape');
-          }}
-          className={`p-2 rounded-md transition-colors ${
-            currentTool === 'shape' && selectedShapeType === 'arc'
-              ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
-              : 'text-stone-300 hover:text-white hover:bg-stone-800'
-          }`}
-          title="아크 그리기 — 시작점 → 끝점 → 드래그로 반지름(휘어짐) 지정 후 클릭 완료"
-        >
-          <Spline className="w-4 h-4" />
-        </button>
-
-        <button
-          id="tool-quick-rect"
-          onClick={() => {
-            onSelectShapeType('rect');
-            onSelectTool('shape');
-          }}
-          className={`p-2 rounded-md transition-colors ${
-            currentTool === 'shape' && selectedShapeType === 'rect'
-              ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
-              : 'text-stone-300 hover:text-white hover:bg-stone-800'
-          }`}
-          title="직사각형 그리기"
-        >
-          <Square className="w-4 h-4" />
-        </button>
-
-        <button
-          id="tool-quick-circle"
-          onClick={() => {
-            onSelectShapeType('ellipse');
-            onSelectTool('shape');
-          }}
-          className={`p-2 rounded-md transition-colors ${
-            currentTool === 'shape' && selectedShapeType === 'ellipse'
-              ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
-              : 'text-stone-300 hover:text-white hover:bg-stone-800'
-          }`}
-          title="원 / 타원 그리기"
-        >
-          <Circle className="w-4 h-4" />
-        </button>
-
         {/* Shapes Menu Dropdown for Other PPT Shapes */}
         <div className="relative" ref={shapeMenuRef}>
           <button
@@ -474,11 +410,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               selectedShapeType !== 'line-arrow-start' &&
               selectedShapeType !== 'line-arrow-open' &&
               selectedShapeType !== 'line-arrow-dot' &&
-              selectedShapeType !== 'line-arrow-diamond' &&
-              selectedShapeType !== 'polyline' &&
-              selectedShapeType !== 'arc' &&
-              selectedShapeType !== 'rect' &&
-              selectedShapeType !== 'ellipse'
+              selectedShapeType !== 'line-arrow-diamond'
                 ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
                 : 'text-stone-300 hover:text-white hover:bg-stone-800'
             }`}
@@ -489,22 +421,14 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               selectedShapeType !== 'line-arrow-start' &&
               selectedShapeType !== 'line-arrow-open' &&
               selectedShapeType !== 'line-arrow-dot' &&
-              selectedShapeType !== 'line-arrow-diamond' &&
-              selectedShapeType !== 'polyline' &&
-              selectedShapeType !== 'arc' &&
-              selectedShapeType !== 'rect' &&
-              selectedShapeType !== 'ellipse'
+              selectedShapeType !== 'line-arrow-diamond'
                 ? `${currentShape.label} (U)`
                 : '기타 도형 모음 (U)'
             }
             aria-label="기타 도형 모음"
           >
             {selectedShapeType !== 'line' &&
-            selectedShapeType !== 'line-arrow' &&
-            selectedShapeType !== 'polyline' &&
-            selectedShapeType !== 'arc' &&
-            selectedShapeType !== 'rect' &&
-            selectedShapeType !== 'ellipse' ? (
+            selectedShapeType !== 'line-arrow' ? (
               <span className="flex items-center justify-center w-5 h-5 [&>svg]:w-5 [&>svg]:h-5">
                 {currentShape.icon}
               </span>

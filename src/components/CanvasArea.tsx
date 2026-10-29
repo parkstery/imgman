@@ -38,6 +38,9 @@ import {
   CropRect,
 } from '../utils/autoCrop';
 import { Crop, Scissors, Copy, Wand2, Minus, Plus } from 'lucide-react';
+import { canEditElement, canEditLayer } from '../utils/lockGuards';
+import { clampManualZoom, computeViewportFit, shouldApplyFitNonce } from '../utils/viewportFit';
+import { shouldBlockDocumentShortcut } from '../utils/documentShortcuts';
 
 /** Default text tool: compact 12px label box */
 const DEFAULT_TEXT_FONT_SIZE = 12;
@@ -83,7 +86,10 @@ interface CanvasAreaProps {
   onPrimaryColorChange: (color: string) => void;
   strokeWidth: number;
   zoom: number;
-  onZoomChange: (zoom: number) => void;
+  onZoomChange: (zoom: number, source?: 'fit' | 'user') => void;
+  zoomFitActive?: boolean;
+  fitNonce?: number;
+  documentInputEnabled?: boolean;
   lastShapeStyle: ShapeStylePreset;
   croppingImageId?: string | null;
   onStartCropImage?: (id: string) => void;
@@ -254,6 +260,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   strokeWidth,
   zoom,
   onZoomChange,
+  zoomFitActive = false,
+  fitNonce = 0,
+  documentInputEnabled = true,
   lastShapeStyle,
   croppingImageId,
   onStartCropImage,
@@ -780,6 +789,28 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     [layers, activeLayerId]
   );
 
+  const elementIsEditable = useCallback(
+    (el: CanvasElement | null | undefined) => !!el && canEditElement(el, layers),
+    [layers]
+  );
+
+  const applyViewportFit = useCallback(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const result = computeViewportFit({
+      viewportWidth: rect.width,
+      viewportHeight: rect.height,
+      canvasWidth: config.width,
+      canvasHeight: config.height,
+      showRulers: config.showRulers,
+    });
+    onZoomChange(result.zoom, 'fit');
+    setPan(result.pan);
+  }, [config.width, config.height, config.showRulers, onZoomChange]);
+
+  const lastFitNonceRef = useRef(0);
+
   // Center canvas initially
   useEffect(() => {
     if (containerRef.current) {
@@ -789,6 +820,22 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       setPan({ x: initialPanX, y: initialPanY });
     }
   }, []);
+
+  useEffect(() => {
+    if (!shouldApplyFitNonce(fitNonce, lastFitNonceRef.current)) return;
+    lastFitNonceRef.current = fitNonce;
+    applyViewportFit();
+  }, [fitNonce, applyViewportFit]);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (zoomFitActive) applyViewportFit();
+    });
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [zoomFitActive, applyViewportFit]);
 
   // Convert screen client coordinates to Canvas local coordinates (in px)
   const clientToCanvas = useCallback(
@@ -817,8 +864,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.05 : 0.05;
-      const nextZoom = Math.min(4, Math.max(0.25, zoom + delta));
-      onZoomChange(nextZoom);
+      const nextZoom = clampManualZoom(zoom + delta, zoom);
+      onZoomChange(nextZoom, 'user');
     } else {
       setPan((prev) => ({
         x: prev.x - e.deltaX * 0.8,
@@ -855,6 +902,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     // Paint Bucket tool
     if (currentTool === 'fill') {
       if (selectedElement && selectedElement.type === 'shape') {
+        if (!elementIsEditable(selectedElement)) return;
         onUpdateElement({
           ...selectedElement,
           fill: primaryColor,
@@ -875,7 +923,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
     // Radial Object Tool
     if (currentTool === 'radial') {
-      if (activeLayer.locked) return;
+      if (!canEditLayer(activeLayer)) return;
       const step = radialToolState?.step;
 
       if (step === 'placing_center') {
@@ -897,7 +945,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
     // Brush or Highlighter tool
     if (currentTool === 'brush' || currentTool === 'highlighter') {
-      if (activeLayer.locked) return;
+      if (!canEditLayer(activeLayer)) return;
       setIsDrawing(true);
       setCurrentPoints([pt]);
       return;
@@ -912,7 +960,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
     // Shape Drawing Tool (including Line, Rectangle, Circle, Polyline, etc.)
     if (currentTool === 'shape') {
-      if (activeLayer.locked) return;
+      if (!canEditLayer(activeLayer)) return;
 
       // Continuous polyline: each click adds a node; double-click / Enter finishes
       if (selectedShapeType === 'polyline') {
@@ -990,7 +1038,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
     // Text Creation Tool — place box and open inline editor immediately
     if (currentTool === 'text') {
-      if (activeLayer.locked) return;
+      if (!canEditLayer(activeLayer)) return;
       if (editingTextId) {
         commitTextEdit();
       }
@@ -1036,6 +1084,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     const radius = Math.max(strokeWidth * 2, 16);
     const toDelete = elements.filter((el) => {
       if (el.layerId !== activeLayer.id) return false;
+      if (!elementIsEditable(el)) return false;
       return (
         pt.x >= el.x - radius &&
         pt.x <= el.x + el.width + radius &&
@@ -1077,7 +1126,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     }
 
     if (currentTool === 'fill') {
-      if (el.type === 'shape') {
+      if (el.type === 'shape' && elementIsEditable(el)) {
         onUpdateElement({
           ...el,
           fill: primaryColor,
@@ -1087,7 +1136,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     }
 
     if (currentTool === 'eraser') {
-      onDeleteElement(el.id);
+      if (elementIsEditable(el)) onDeleteElement(el.id);
       return;
     }
 
@@ -1124,7 +1173,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     }
 
     // Start moving the selected element(s)
-    if (!activeLayer.locked) {
+    if (elementIsEditable(el)) {
       setIsTransforming(true);
       setActiveHandle('move');
       transformDirtyRef.current = false;
@@ -1153,8 +1202,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       return;
     }
     if (el.type === 'image' && onStartCropImage) {
+      if (!elementIsEditable(el)) return;
       onStartCropImage(el.id);
     } else if (el.type === 'text') {
+      if (!elementIsEditable(el)) return;
       beginTextEdit(el);
     }
   };
@@ -1236,6 +1287,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   useEffect(() => {
     if (!croppingImage) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (shouldBlockDocumentShortcut({ modalOpen: !documentInputEnabled, target: e.target })) {
+        return;
+      }
       // Cut: Ctrl+X
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
         e.preventDefault();
@@ -1267,6 +1321,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     onCutImagePart,
     onCopyImagePart,
     onFinishCropImage,
+    documentInputEnabled,
   ]);
 
   // MOUSE MOVE
@@ -1559,7 +1614,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           const updates: CanvasElement[] = [];
           transformStart.elementsStartPositions.forEach((pos) => {
             const el = elements.find((item) => item.id === pos.id);
-            if (!el) return;
+            if (!el || !elementIsEditable(el)) return;
             updates.push({ ...el, x: pos.x + groupDx, y: pos.y + groupDy });
           });
           if (updates.length > 0) {
@@ -1776,9 +1831,15 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       const dy = endY - startY;
       const length = Math.hypot(dx, dy);
 
-      // Create line if length is at least 4px (or default horizontal line if just clicked)
-      const finalLength = length >= 4 ? length : 140;
-      const deg = length >= 4 ? (Math.atan2(dy, dx) * 180) / Math.PI : 0;
+      // A click that does not move must not become a default line to the right.
+      if (length < 4) {
+        updateLinePreviewEnd(null);
+        setIsDrawing(false);
+        return;
+      }
+
+      const finalLength = length;
+      const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
       const strokeW = (lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0) ? lastShapeStyle.strokeWidth : (arrowDefaults.strokeWidth || strokeWidth || 2);
       const thickness = Math.max(strokeW * 4, 16);
       const lineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
@@ -2139,14 +2200,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   useEffect(() => {
     if (!polylineDraft) return;
     const handlePolyKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.isContentEditable)
-      ) {
+      if (shouldBlockDocumentShortcut({ modalOpen: !documentInputEnabled, target: e.target })) {
         return;
       }
       if (e.key === 'Enter') {
@@ -2174,20 +2228,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
     window.addEventListener('keydown', handlePolyKey, true);
     return () => window.removeEventListener('keydown', handlePolyKey, true);
-  }, [polylineDraft, finishPolylineDraft, cancelPolylineDraft]);
+  }, [polylineDraft, finishPolylineDraft, cancelPolylineDraft, documentInputEnabled]);
 
   // Keyboard: finish / cancel arc
   useEffect(() => {
     if (!arcDraft) return;
     const handleArcKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.isContentEditable)
-      ) {
+      if (shouldBlockDocumentShortcut({ modalOpen: !documentInputEnabled, target: e.target })) {
         return;
       }
       if (e.key === 'Enter' && arcDraft.end && arcBendRef.current) {
@@ -2202,7 +2249,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
     window.addEventListener('keydown', handleArcKey, true);
     return () => window.removeEventListener('keydown', handleArcKey, true);
-  }, [arcDraft, finishArcDraft, cancelArcDraft]);
+  }, [arcDraft, finishArcDraft, cancelArcDraft, documentInputEnabled]);
 
   // Keyboard shortcuts for Canvas Crop:
   // Ctrl+X: Cut dragged region
@@ -2213,6 +2260,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   useEffect(() => {
     if (currentTool !== 'crop' || !cropBox) return;
     const handleCropKeyDown = (e: KeyboardEvent) => {
+      if (shouldBlockDocumentShortcut({ modalOpen: !documentInputEnabled, target: e.target })) {
+        return;
+      }
       // Cut: Ctrl+X or Cmd+X
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
         e.preventDefault();
@@ -2245,12 +2295,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
     window.addEventListener('keydown', handleCropKeyDown);
     return () => window.removeEventListener('keydown', handleCropKeyDown);
-  }, [currentTool, cropBox, applyCrop, onSelectTool, handleCutCrop, handleCopyCrop, onTriggerPaste]);
+  }, [currentTool, cropBox, applyCrop, onSelectTool, handleCutCrop, handleCopyCrop, onTriggerPaste, documentInputEnabled]);
 
   // Start handle transform
   const startTransform = (handle: HandleType | 'move', e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!selectedElement || activeLayer.locked) return;
+    if (!selectedElement || !elementIsEditable(selectedElement)) return;
     setIsTransforming(true);
     setActiveHandle(handle);
     transformDirtyRef.current = false;
@@ -3230,7 +3280,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         )}
 
         {/* Selected LINE Endpoint Handles & Move Overlay (PowerPoint Style) */}
-        {currentTool === 'select' && !croppingImageId && selectedLineEndpoints && selectedElement && !activeLayer.locked && (
+        {currentTool === 'select' && !croppingImageId && selectedLineEndpoints && selectedElement && elementIsEditable(selectedElement) && (
           <div className="absolute inset-0 pointer-events-none z-20">
             <svg className="w-full h-full absolute inset-0 overflow-visible pointer-events-none">
               {/* Move hitbox along the entire line */}
@@ -3282,7 +3332,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         )}
 
         {/* Multi-select group bounds: move all selected shapes together */}
-        {currentTool === 'select' && !croppingImageId && groupBounds && selectedElements.length > 1 && !activeLayer.locked && (
+        {currentTool === 'select' && !croppingImageId && groupBounds && selectedElements.length > 1 && selectedElements.some(elementIsEditable) && (
           <div
             style={{
               position: 'absolute',
@@ -3307,7 +3357,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           selectedElementIds.length === 1 &&
           !selectedLineEndpoints &&
           selectedElement &&
-          !activeLayer.locked &&
+          elementIsEditable(selectedElement) &&
           selectedElement.id !== editingTextId && (
           <div
             style={{

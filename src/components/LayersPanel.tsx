@@ -257,14 +257,26 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           </button>
           <button
             id="btn-delete-layer"
-            disabled={layers.length <= 1}
+            disabled={
+              layers.length <= 1 ||
+              !!activeLayer?.locked ||
+              elements.some((el) => el.layerId === activeLayerId && el.locked)
+            }
             onClick={() => onDeleteLayer(activeLayerId)}
             className={`p-1.5 rounded transition-colors ${
-              layers.length > 1
+              layers.length > 1 &&
+              !activeLayer?.locked &&
+              !elements.some((el) => el.layerId === activeLayerId && el.locked)
                 ? 'hover:bg-stone-800 text-stone-400 hover:text-rose-400'
                 : 'text-stone-700 cursor-not-allowed'
             }`}
-            title="현재 레이어 삭제"
+            title={
+              activeLayer?.locked
+                ? '잠긴 레이어는 삭제할 수 없습니다'
+                : elements.some((el) => el.layerId === activeLayerId && el.locked)
+                  ? '잠긴 객체가 있는 레이어는 삭제할 수 없습니다'
+                  : '현재 레이어 삭제'
+            }
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -396,6 +408,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                         <span className="truncate flex-1 min-w-0">
                           {el.name || (el.type === 'shape' ? (el as any).shapeType : el.type)}
                         </span>
+                        {(el.locked || layer.locked) && (
+                          <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+                        )}
                       </div>
                     );
                   })}

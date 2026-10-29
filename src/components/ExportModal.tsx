@@ -16,6 +16,7 @@ import { VectorizeError } from '../utils/rasterVectorizer';
 import { getExportVisibleImageElements } from '../utils/svgExportImages';
 import { exportToRaster, downloadDataUrl } from '../utils/rasterExport';
 import { X, Download, FileCode, Image as ImageIcon, Sparkles, Settings, AlertTriangle, CheckCheck } from 'lucide-react';
+import { ModalDialog } from './ModalDialog';
 
 /** Export basename: im-YYMMDD-HHMMSS (e.g. im-261005-064530) */
 function makeExportFilename(date = new Date()): string {
@@ -188,8 +189,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const isLossy = format === 'jpeg' || format === 'webp';
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-xl w-full max-h-[90vh] overflow-y-auto p-6 text-stone-200 select-none">
+    <ModalDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      titleId="export-dialog-title"
+      panelClassName="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-xl w-full max-h-[90vh] overflow-y-auto p-6 text-stone-200 select-none"
+    >
         {/* Modal Header */}
         <div className="flex items-center justify-between pb-4 border-b border-stone-800">
           <div className="flex items-center space-x-2">
@@ -197,7 +202,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               <Download className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-stone-100">그래픽 내보내기 (Export)</h2>
+              <h2 id="export-dialog-title" className="text-base font-semibold text-stone-100">그래픽 내보내기 (Export)</h2>
               <p className="text-xs text-stone-400">벡터 SVG 및 고해상도 이미지 포맷 지원</p>
             </div>
           </div>
@@ -582,7 +587,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </span>
           </button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 };

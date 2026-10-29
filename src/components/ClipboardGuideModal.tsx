@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   FolderOpen,
 } from 'lucide-react';
+import { ModalDialog } from './ModalDialog';
 
 interface ClipboardGuideModalProps {
   isOpen: boolean;
@@ -29,13 +30,9 @@ export const ClipboardGuideModal: React.FC<ClipboardGuideModalProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
   const [pasteFeedback, setPasteFeedback] = useState<string | null>(null);
 
-  // Auto-focus the paste zone when modal opens so the user can immediately press Ctrl+V
   useEffect(() => {
     if (isOpen) {
       setPasteFeedback(null);
-      setTimeout(() => {
-        pasteZoneRef.current?.focus();
-      }, 100);
     }
   }, [isOpen]);
 
@@ -159,13 +156,15 @@ export const ClipboardGuideModal: React.FC<ClipboardGuideModalProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-200"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <ModalDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      titleId="clipboard-dialog-title"
+      closeOnBackdrop
+      initialFocusRef={pasteZoneRef}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-200"
+      panelClassName="relative w-full max-w-xl rounded-2xl bg-stone-900 border border-stone-800 shadow-2xl p-6 text-stone-200 flex flex-col space-y-4"
     >
-      <div className="relative w-full max-w-xl rounded-2xl bg-stone-900 border border-stone-800 shadow-2xl p-6 text-stone-200 flex flex-col space-y-4">
         {/* Close Button */}
         <button
           onClick={onClose}
@@ -181,7 +180,7 @@ export const ClipboardGuideModal: React.FC<ClipboardGuideModalProps> = ({
             <Clipboard className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-stone-100">클립보드 이미지 붙여넣기</h2>
+            <h2 id="clipboard-dialog-title" className="text-base font-bold text-stone-100">클립보드 이미지 붙여넣기</h2>
             <p className="text-xs text-stone-400">샌드박스 보안 환경 안내 및 즉시 붙여넣기</p>
           </div>
         </div>
@@ -301,7 +300,6 @@ export const ClipboardGuideModal: React.FC<ClipboardGuideModalProps> = ({
             닫기
           </button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 };

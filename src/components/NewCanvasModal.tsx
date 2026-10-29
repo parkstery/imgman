@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, FilePlus2 } from 'lucide-react';
 import { CanvasConfig } from '../types';
+import { ModalDialog } from './ModalDialog';
 
 interface NewCanvasModalProps {
   isOpen: boolean;
@@ -47,15 +48,19 @@ export const NewCanvasModal: React.FC<NewCanvasModalProps> = ({
   const heightNum = parseInt(heightText, 10);
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-lg w-full p-6 text-stone-200 select-none">
+    <ModalDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      titleId="new-canvas-dialog-title"
+      panelClassName="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-lg w-full p-6 text-stone-200 select-none"
+    >
         <div className="flex items-center justify-between pb-3 border-b border-stone-800">
           <div className="flex items-center space-x-2">
             <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">
               <FilePlus2 className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-stone-100">새 캔버스 생성</h2>
+              <h2 id="new-canvas-dialog-title" className="text-base font-semibold text-stone-100">새 캔버스 생성</h2>
               <p className="text-xs text-stone-400">원하는 크기와 배경색을 선택하세요</p>
             </div>
           </div>
@@ -185,7 +190,6 @@ export const NewCanvasModal: React.FC<NewCanvasModalProps> = ({
             캔버스 생성
           </button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 };

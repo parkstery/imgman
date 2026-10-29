@@ -19,6 +19,7 @@ import {
   ClipboardPaste,
 } from 'lucide-react';
 import { CanvasConfig } from '../types';
+import { clampManualZoom } from '../utils/viewportFit';
 
 interface HeaderNavbarProps {
   canUndo: boolean;
@@ -261,7 +262,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
         <div className="flex items-center space-x-1.5 px-2">
           <button
             id="btn-zoom-out"
-            onClick={() => onZoomChange(Math.max(0.25, zoom - 0.1))}
+            onClick={() => onZoomChange(clampManualZoom(zoom - 0.1, zoom))}
             className="p-1 rounded text-stone-400 hover:text-white hover:bg-stone-800"
             title="축소"
           >
@@ -279,7 +280,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
 
           <button
             id="btn-zoom-in"
-            onClick={() => onZoomChange(Math.min(4, zoom + 0.1))}
+            onClick={() => onZoomChange(clampManualZoom(zoom + 0.1, zoom))}
             className="p-1 rounded text-stone-400 hover:text-white hover:bg-stone-800"
             title="확대"
           >

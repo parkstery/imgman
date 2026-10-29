@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Keyboard } from 'lucide-react';
+import { ModalDialog } from './ModalDialog';
 
 interface ShortcutsGuideModalProps {
   isOpen: boolean;
@@ -44,14 +45,18 @@ export const ShortcutsGuideModal: React.FC<ShortcutsGuideModalProps> = ({ isOpen
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-lg w-full p-6 text-stone-200 select-none">
+    <ModalDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      titleId="shortcuts-dialog-title"
+      panelClassName="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-lg w-full p-6 text-stone-200 select-none"
+    >
         <div className="flex items-center justify-between pb-3 border-b border-stone-800">
           <div className="flex items-center space-x-2">
             <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">
               <Keyboard className="w-5 h-5" />
             </div>
-            <h2 className="text-base font-semibold text-stone-100">단축키 안내 (Keyboard Shortcuts)</h2>
+            <h2 id="shortcuts-dialog-title" className="text-base font-semibold text-stone-100">단축키 안내 (Keyboard Shortcuts)</h2>
           </div>
           <button
             onClick={onClose}
@@ -83,7 +88,6 @@ export const ShortcutsGuideModal: React.FC<ShortcutsGuideModalProps> = ({ isOpen
             닫기
           </button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 };

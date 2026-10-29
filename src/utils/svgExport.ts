@@ -1,6 +1,15 @@
 import { CanvasConfig, CanvasElement, Layer, ShapeElement, ImageElement } from '../types';
 import { getShapePath, getPolylinePath, getArcPath } from './shapeGenerators';
 import {
+  getArrowHeadPath,
+  getArrowHeadRotateDeg,
+  getLineAngleDeg,
+  getShortenedLineEndpoints,
+  isArrowHeadFilled,
+  lineCapToSvg,
+  resolveArrowLinePoints,
+} from './arrowUtils';
+import {
   resolveVectorizeOptions,
   VectorizeError,
   vectorizeImageElement,
@@ -397,6 +406,61 @@ function assembleSvgString(
             el.shapeType === 'polyline' ||
             el.shapeType === 'arc';
 
+          let dashAttr = '';
+          if (el.strokeDash === 'dashed') dashAttr = ' stroke-dasharray="8 6"';
+          else if (el.strokeDash === 'dotted') dashAttr = ' stroke-dasharray="3 4"';
+
+          const strokeWidth = fmt(el.strokeWidth);
+          const strokeColor = normalizeColor(el.stroke);
+
+          const isPowerPointArrowLine =
+            (el.shapeType === 'line' || el.shapeType.startsWith('line-arrow')) &&
+            !!(el.beginArrow || el.endArrow);
+
+          if (isPowerPointArrowLine) {
+            const { start: startPoint, end: endPoint } = resolveArrowLinePoints(
+              el.width,
+              el.height,
+              el.points
+            );
+            const beginArrow = el.beginArrow || { type: 'none', size: 'medium' };
+            const endArrow = el.endArrow || { type: 'none', size: 'medium' };
+            const shortened = getShortenedLineEndpoints(
+              startPoint.x,
+              startPoint.y,
+              endPoint.x,
+              endPoint.y,
+              el.strokeWidth,
+              beginArrow.type,
+              beginArrow.size,
+              endArrow.type,
+              endArrow.size
+            );
+            const angle = getLineAngleDeg(startPoint.x, startPoint.y, endPoint.x, endPoint.y);
+            const beginRotate = getArrowHeadRotateDeg(angle, 'begin');
+            const endRotate = getArrowHeadRotateDeg(angle, 'end');
+            const cap = lineCapToSvg(el.lineCap);
+
+            parts.push(`<g transform="${elementTransform}">`);
+            parts.push(
+              `<line x1="${fmt(shortened.startX)}" y1="${fmt(shortened.startY)}" x2="${fmt(shortened.endX)}" y2="${fmt(shortened.endY)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeWidth}" stroke-linecap="${cap}"${dashAttr}${opacityAttr}${filterAttr} />`
+            );
+            if (beginArrow.type !== 'none') {
+              const filled = isArrowHeadFilled(beginArrow.type);
+              parts.push(
+                `<path d="${getArrowHeadPath(el.strokeWidth, beginArrow.type, beginArrow.size)}" transform="translate(${fmt(startPoint.x)}, ${fmt(startPoint.y)}) rotate(${fmt(beginRotate)})" fill="${filled ? strokeColor : 'none'}" stroke="${strokeColor}" stroke-width="${filled ? '0' : strokeWidth}" stroke-linecap="round" stroke-linejoin="round"${opacityAttr}${filterAttr} />`
+              );
+            }
+            if (endArrow.type !== 'none') {
+              const filled = isArrowHeadFilled(endArrow.type);
+              parts.push(
+                `<path d="${getArrowHeadPath(el.strokeWidth, endArrow.type, endArrow.size)}" transform="translate(${fmt(endPoint.x)}, ${fmt(endPoint.y)}) rotate(${fmt(endRotate)})" fill="${filled ? strokeColor : 'none'}" stroke="${strokeColor}" stroke-width="${filled ? '0' : strokeWidth}" stroke-linecap="round" stroke-linejoin="round"${opacityAttr}${filterAttr} />`
+              );
+            }
+            parts.push('</g>');
+            break;
+          }
+
           let pathD = '';
           if (el.shapeType === 'polyline' && el.points && el.points.length >= 2) {
             pathD = polylinePath(
@@ -414,13 +478,8 @@ function assembleSvgString(
           if (!isLine && el.gradient?.enabled) {
             fillAttr = `url(#${gradientRefMap.get(el.id)})`;
           }
-          let dashAttr = '';
-          if (el.strokeDash === 'dashed') dashAttr = ' stroke-dasharray="8 6"';
-          else if (el.strokeDash === 'dotted') dashAttr = ' stroke-dasharray="3 4"';
 
           const lineCaps = isLine ? ' stroke-linecap="round" stroke-linejoin="round"' : '';
-          const strokeWidth = fmt(el.strokeWidth);
-          const strokeColor = normalizeColor(el.stroke);
 
           parts.push(`<g transform="${elementTransform}">`);
           parts.push(`<path d="${pathD}" fill="${fillAttr}" stroke="${strokeColor}" stroke-width="${strokeWidth}"${lineCaps}${dashAttr}${opacityAttr}${filterAttr} />`);

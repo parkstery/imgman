@@ -25,3 +25,45 @@ export function getRotationOriginAttr(el: CanvasElement): string {
   const p = getRotationPivot(el);
   return `${p.x} ${p.y}`;
 }
+
+/**
+ * Map a point from element-local space (relative to x/y, before rotation and
+ * flip) to canvas space. Mirrors the renderer: rotate about the pivot, then
+ * flip about the bbox centre.
+ */
+export function localToCanvas(el: CanvasElement, p: { x: number; y: number }): { x: number; y: number } {
+  const pv = getRotationPivot(el);
+  const cx = el.width / 2;
+  const cy = el.height / 2;
+  const rad = ((el.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const lx = p.x - pv.x;
+  const ly = p.y - pv.y;
+  const qx = pv.x - cx + lx * cos - ly * sin;
+  const qy = pv.y - cy + lx * sin + ly * cos;
+  return {
+    x: el.x + cx + (el.flipH ? -qx : qx),
+    y: el.y + cy + (el.flipV ? -qy : qy),
+  };
+}
+
+/** Inverse of `localToCanvas`. */
+export function canvasToLocal(el: CanvasElement, p: { x: number; y: number }): { x: number; y: number } {
+  const pv = getRotationPivot(el);
+  const cx = el.width / 2;
+  const cy = el.height / 2;
+  const rad = ((el.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  let qx = p.x - el.x - cx;
+  let qy = p.y - el.y - cy;
+  if (el.flipH) qx = -qx;
+  if (el.flipV) qy = -qy;
+  const lx = qx - pv.x + cx;
+  const ly = qy - pv.y + cy;
+  return {
+    x: pv.x + lx * cos + ly * sin,
+    y: pv.y - lx * sin + ly * cos,
+  };
+}

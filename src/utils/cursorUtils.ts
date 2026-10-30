@@ -60,6 +60,8 @@ export const getToolCursor = (tool: string): string => {
       return 'text';
 
     case 'crop':
+    case 'pen':
+    case 'lasso':
       return 'crosshair';
 
     case 'pan':

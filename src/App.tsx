@@ -22,6 +22,16 @@ import { ExportModal } from './components/ExportModal';
 import { ShortcutsGuideModal } from './components/ShortcutsGuideModal';
 import { NewCanvasModal } from './components/NewCanvasModal';
 import { ClipboardGuideModal } from './components/ClipboardGuideModal';
+import { HistoryPanel } from './components/HistoryPanel';
+import {
+  AutosaveRecord,
+  clearAutosave,
+  formatSavedAt,
+  isAutosaveEnabled,
+  loadAutosave,
+  saveAutosave,
+  setAutosaveEnabled,
+} from './utils/autosave';
 import { exportRegionToRaster } from './utils/rasterExport';
 import { getContentBounds } from './utils/canvasFit';
 import {
@@ -44,6 +54,15 @@ import {
   isLayerLocked,
 } from './utils/lockGuards';
 import { cloneElements, remapRadialInstanceGroups } from './utils/cloneElements';
+import { convertShapeToPath } from './utils/pathNodes';
+import {
+  LassoAction,
+  clippedPolygonBounds,
+  elementTouchesRect,
+  isElementInsidePolygon,
+  maskDataUrlWithPolygon,
+  punchPolygonInImageElement,
+} from './utils/lassoSelection';
 import {
   shouldBlockDocumentPaste,
   shouldBlockDocumentShortcut,
@@ -99,6 +118,9 @@ function initialSnapshot() {
 }
 
 export default function App() {
+  // ErrorBoundary remounts restore from memory; only a fresh page load offers the autosave
+  const fromSessionRef = useRef<boolean | null>(null);
+  if (fromSessionRef.current === null) fromSessionRef.current = recallDocument() !== null;
   const recovered = useMemo(() => initialSnapshot(), []);
 
   // State
@@ -109,6 +131,8 @@ export default function App() {
 
   // Multi-element selection state
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
+  // Pen path currently showing its anchors for node editing
+  const [pathEditId, setPathEditId] = useState<string | null>(null);
   const selectedElementId = selectedElementIds[selectedElementIds.length - 1] || null;
 
   // Persistent shape styling (Feature 5: applied to subsequent shapes)
@@ -405,7 +429,7 @@ export default function App() {
   // Switching tools: canvas crop must not keep selection/transform active
   const handleSelectTool = useCallback(
     (tool: ToolType) => {
-      if (tool === 'crop') {
+      if (tool === 'crop' || tool === 'lasso') {
         setSelectedElementIds([]);
         setCroppingImageId(null);
         setActiveImgCropBox(null);
@@ -486,11 +510,13 @@ export default function App() {
 
   // History for Undo / Redo (commit always records; undo/redo never skip the next edit)
   const {
+    history: documentHistory,
     canUndo,
     canRedo,
     commit: commitHistorySnapshot,
     undo: undoHistorySnapshot,
     redo: redoHistorySnapshot,
+    jumpTo: jumpHistorySnapshot,
     reset: resetHistorySnapshot,
   } = useDocumentHistory(recovered);
 
@@ -602,6 +628,101 @@ export default function App() {
     if (snap) applySnapshot(snap);
   }, [redoHistorySnapshot, applySnapshot]);
 
+  // History panel: jump straight to any recorded step
+  const handleJumpHistory = useCallback(
+    (index: number) => {
+      const snap = jumpHistorySnapshot(index);
+      if (snap) applySnapshot(snap);
+    },
+    [jumpHistorySnapshot, applySnapshot]
+  );
+
+  /* ---------------------------------------------------------------------- */
+  /* Autosave (IndexedDB)                                                   */
+  /* ---------------------------------------------------------------------- */
+  const [autosaveOn, setAutosaveOn] = useState<boolean>(() => isAutosaveEnabled());
+  const [autosaveSavedAt, setAutosaveSavedAt] = useState<number | null>(null);
+  const [autosaveError, setAutosaveError] = useState<string | null>(null);
+  const [restoreOffer, setRestoreOffer] = useState<AutosaveRecord | null>(null);
+  // No saving until we know whether an older autosave should be offered first
+  const [autosaveReady, setAutosaveReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (fromSessionRef.current) {
+      setAutosaveReady(true);
+      return;
+    }
+    loadAutosave()
+      .then((rec) => {
+        if (cancelled) return;
+        if (rec && rec.elements?.length > 0) {
+          const result = validateProjectData({
+            version: rec.version,
+            config: rec.config,
+            layers: rec.layers,
+            elements: rec.elements,
+          });
+          if (result.ok) {
+            setRestoreOffer({ ...rec, ...result.data, savedAt: rec.savedAt, activeLayerId: rec.activeLayerId });
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAutosaveError('이 브라우저에서는 자동 저장을 쓸 수 없습니다');
+      })
+      .finally(() => {
+        if (!cancelled) setAutosaveReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const latestDocRef = useRef<HistorySnapshot>(recovered);
+  latestDocRef.current = { elements, layers, activeLayerId, canvasConfig: config };
+
+  useEffect(() => {
+    if (!autosaveOn || !autosaveReady || restoreOffer) return;
+    const t = setTimeout(() => {
+      saveAutosave(latestDocRef.current)
+        .then((ts) => {
+          setAutosaveSavedAt(ts);
+          setAutosaveError(null);
+        })
+        .catch(() => setAutosaveError('자동 저장 실패 (저장 공간 부족일 수 있음)'));
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [elements, layers, config, activeLayerId, autosaveOn, autosaveReady, restoreOffer]);
+
+  // Best-effort flush when the tab goes away mid-debounce
+  useEffect(() => {
+    if (!autosaveOn || !autosaveReady || restoreOffer) return;
+    const flush = () => {
+      void saveAutosave(latestDocRef.current).catch(() => {});
+    };
+    window.addEventListener('pagehide', flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, [autosaveOn, autosaveReady, restoreOffer]);
+
+  const handleToggleAutosave = useCallback((enabled: boolean) => {
+    setAutosaveEnabled(enabled);
+    setAutosaveOn(enabled);
+  }, []);
+
+  const handleClearAutosave = useCallback(() => {
+    clearAutosave()
+      .then(() => {
+        setAutosaveSavedAt(null);
+        showToast(
+          autosaveOn
+            ? '자동 저장본을 지웠습니다. 다음 변경부터 다시 저장합니다.'
+            : '자동 저장본을 지웠습니다.'
+        );
+      })
+      .catch(() => showToast('자동 저장본을 지우지 못했습니다.'));
+  }, [autosaveOn, showToast]);
+
   // Selection handlers ??sync selected object's color/style for subsequent drawing
   const handleSelectElement = useCallback(
     (id: string | null) => {
@@ -639,7 +760,8 @@ export default function App() {
                 : undefined,
           }));
         } else {
-          setSelectedShapeType(target.shapeType);
+          // Pen paths are drawn with the pen tool, not the shape tool
+          if (target.shapeType !== 'path') setSelectedShapeType(target.shapeType);
           const fillColor =
             target.fill && target.fill !== 'none'
               ? target.fill
@@ -862,6 +984,24 @@ export default function App() {
       }
     },
     [layers, config, pushHistory]
+  );
+
+  // Shape → editable pen path, then straight into node editing
+  const handleConvertToPath = useCallback(
+    (el: CanvasElement) => {
+      if (el.type !== 'shape' || !canEditElement(el, layers)) return;
+      const converted = convertShapeToPath(el);
+      if (!converted) {
+        showToast('이 도형은 패스로 바꿀 수 없습니다.');
+        return;
+      }
+      handleUpdateElement(converted);
+      setSelectedElementIds([converted.id]);
+      setCurrentTool('select');
+      setPathEditId(converted.id);
+      showToast('패스로 변환했습니다. 점과 핸들을 드래그해 모양을 고치세요.');
+    },
+    [layers, handleUpdateElement, showToast]
   );
 
   // Batch-update multiple elements in one commit (group move / multi-edit)
@@ -1286,6 +1426,121 @@ export default function App() {
       }
     },
     [elements, layers, config, pushHistory, showToast]
+  );
+
+  // Lasso (올가미) selection: copy / cut / new image / erase inside a free-form outline.
+  // Resolves true when the outline should stay selected.
+  const handleLassoAction = useCallback(
+    async (polygon: Point[], action: LassoAction): Promise<boolean> => {
+      const region = clippedPolygonBounds(polygon, config.width, config.height);
+      if (!region) {
+        showToast('선택 영역이 캔버스 밖에 있습니다.');
+        return true;
+      }
+      try {
+        let piece: { dataUrl: string; blob: Blob | null } | null = null;
+        if (action !== 'erase') {
+          const raster = await exportRegionToRaster(layers, elementsRef.current, config, region, 1, false);
+          piece = await maskDataUrlWithPolygon(raster.dataUrl, region, polygon);
+        }
+
+        if (piece && (action === 'copy' || action === 'cut')) {
+          internalClipboardRef.current = {
+            type: 'image-slice',
+            imageSlice: {
+              src: piece.dataUrl,
+              width: region.w,
+              height: region.h,
+              naturalWidth: region.w,
+              naturalHeight: region.h,
+              suggestedX: region.x + PASTE_OFFSET_PX,
+              suggestedY: region.y + PASTE_OFFSET_PX,
+            },
+          };
+          await writeImageBlobToSystemClipboard(piece.blob);
+        }
+        if (action === 'copy') {
+          showToast('올가미 영역을 복사했습니다. (Ctrl+V로 붙여넣기)');
+          return true;
+        }
+
+        if (action === 'duplicate' && piece) {
+          const targetLayer = layers.find((l) => l.id === activeLayerId);
+          if (!canEditLayer(targetLayer)) {
+            showToast('잠긴 레이어에는 새 이미지를 만들 수 없습니다.');
+            return true;
+          }
+          const newImg: ImageElement = {
+            id: `img-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            type: 'image',
+            name: '올가미 이미지',
+            layerId: activeLayerId,
+            x: region.x,
+            y: region.y,
+            width: region.w,
+            height: region.h,
+            src: piece.dataUrl,
+            naturalWidth: region.w,
+            naturalHeight: region.h,
+            rotation: 0,
+            opacity: 1,
+            visible: true,
+            locked: false,
+            filters: { brightness: 100, contrast: 100, saturation: 100, blur: 0, grayscale: 0, invert: 0 },
+          };
+          const next = [...elementsRef.current, newImg];
+          elementsRef.current = next;
+          setElements(next);
+          pushHistory(next, layers, config);
+          setSelectedElementIds([newImg.id]);
+          setCurrentTool('select');
+          showToast('올가미 영역을 새 이미지로 만들었습니다.');
+          return false;
+        }
+
+        // cut / erase: punch the outline out of images, drop objects fully inside it
+        const isShown = (el: CanvasElement) =>
+          el.visible !== false && layers.find((l) => l.id === el.layerId)?.visible !== false;
+        const removed = new Set<string>();
+        const punches = new Map<string, Promise<ImageElement>>();
+        for (const el of elementsRef.current) {
+          if (!isShown(el) || !canEditElement(el, layers)) continue;
+          if (isElementInsidePolygon(el, polygon)) removed.add(el.id);
+          else if (el.type === 'image' && elementTouchesRect(el, region)) {
+            punches.set(el.id, punchPolygonInImageElement(el, polygon));
+          }
+        }
+        if (removed.size === 0 && punches.size === 0) {
+          showToast(
+            action === 'cut'
+              ? '복사했지만 선택 영역에 지울 수 있는 이미지·객체가 없습니다.'
+              : '선택 영역에 지울 수 있는 이미지·객체가 없습니다.'
+          );
+          return action === 'erase';
+        }
+        const punched = new Map<string, ImageElement>(
+          await Promise.all([...punches.entries()].map(async ([id, task]) => [id, await task] as const))
+        );
+        const next = elementsRef.current
+          .filter((el) => !removed.has(el.id))
+          .map((el) => punched.get(el.id) ?? el);
+        elementsRef.current = next;
+        setElements(next);
+        pushHistory(next, layers, config);
+        setSelectedElementIds((prev) => prev.filter((id) => !removed.has(id)));
+        showToast(
+          action === 'cut'
+            ? '올가미 영역을 오려냈습니다. Ctrl+V로 붙여넣기 하세요.'
+            : '올가미 영역을 지웠습니다.'
+        );
+        return false;
+      } catch (err) {
+        console.error('Lasso action failed:', err);
+        showToast('올가미 작업 중 오류가 발생했습니다.');
+        return true;
+      }
+    },
+    [layers, config, activeLayerId, pushHistory, showToast, writeImageBlobToSystemClipboard]
   );
 
   // Copy Selected Region of an Image (Ctrl+C in crop mode)
@@ -2107,8 +2362,43 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  // Restore the autosaved document offered on startup
+  const handleRestoreAutosave = useCallback(() => {
+    const rec = restoreOffer;
+    if (!rec) return;
+    const nextActive = rec.layers.some((l) => l.id === rec.activeLayerId)
+      ? rec.activeLayerId
+      : rec.layers[0].id;
+    setConfig(rec.config);
+    setLayers(rec.layers);
+    setActiveLayerId(nextActive);
+    setElements(rec.elements);
+    elementsRef.current = rec.elements;
+    setSelectedElementIds([]);
+    setPathEditId(null);
+    setCroppingImageId(null);
+    setActiveImgCropBox(null);
+    activeImgCropBoxRef.current = null;
+    resetHistorySnapshot({
+      elements: rec.elements,
+      layers: rec.layers,
+      activeLayerId: nextActive,
+      canvasConfig: rec.config,
+    });
+    setRestoreOffer(null);
+    setAutosaveSavedAt(rec.savedAt);
+    setZoomFitActive(true);
+    setFitNonce((n) => n + 1);
+    showToast('자동 저장된 작업을 복구했습니다.');
+  }, [restoreOffer, resetHistorySnapshot, showToast]);
+
+  const handleDiscardAutosave = useCallback(() => {
+    setRestoreOffer(null);
+    showToast('이전 자동 저장본을 버렸습니다. 지금 문서를 자동 저장합니다.');
+  }, [showToast]);
+
   const handlePrimaryColorChange = useCallback(
-    (color: string) => {
+    (color: string, transient = false) => {
       setPrimaryColor(color);
       // Persist for subsequent shapes / lines / paint; clear sticky gradient so solid color wins
       setLastShapeStyle((prev) => ({
@@ -2152,7 +2442,8 @@ export default function App() {
         if (hasChanges) {
           setElements(next);
           elementsRef.current = next;
-          pushHistory(next, layers, config);
+          // Live picker drags record one history step, on release
+          if (!transient) pushHistory(next, layers, config);
         }
       }
     },
@@ -2466,6 +2757,12 @@ export default function App() {
           case 'g':
             handleSelectTool('fill');
             break;
+          case 'p':
+            handleSelectTool('pen');
+            break;
+          case 'l':
+            handleSelectTool('lasso');
+            break;
           case 'c': {
             const currentSelected = elements.find((el) => el.id === selectedElementId);
             if (currentSelected && currentSelected.type === 'image') {
@@ -2618,6 +2915,19 @@ export default function App() {
           onSelectElement={handleSelectElement}
           isOpen={isLeftPanelOpen}
           onToggleCollapse={toggleLeftPanel}
+          historyCount={documentHistory.snapshots.length}
+          historyPanel={
+            <HistoryPanel
+              snapshots={documentHistory.snapshots}
+              index={documentHistory.index}
+              onJump={handleJumpHistory}
+              autosaveEnabled={autosaveOn}
+              autosaveSavedAt={autosaveSavedAt}
+              autosaveError={autosaveError}
+              onToggleAutosave={handleToggleAutosave}
+              onClearAutosave={handleClearAutosave}
+            />
+          }
         />
 
         {/* Center: Canvas Viewport */}
@@ -2673,6 +2983,9 @@ export default function App() {
             onRadialSetStep={handleRadialSetStep}
             onGroup={handleGroup}
             onUngroup={handleUngroup}
+            pathEditId={pathEditId}
+            onSetPathEditId={setPathEditId}
+            onLassoAction={handleLassoAction}
           />
       </div>
       </div>
@@ -2729,6 +3042,13 @@ export default function App() {
           onRadialConfirm={handleRadialConfirm}
           onRadialCancel={handleRadialCancel}
           onCreateRadialArray={handleCreateRadialArray}
+          isPathEditing={!!selectedElement && pathEditId === selectedElement.id}
+          onTogglePathEdit={() => {
+            if (!selectedElement) return;
+            setCurrentTool('select');
+            setPathEditId((prev) => (prev === selectedElement.id ? null : selectedElement.id));
+          }}
+          onConvertToPath={handleConvertToPath}
       />
 
       {/* Modals */}
@@ -2738,6 +3058,7 @@ export default function App() {
         layers={layers}
         elements={elements}
         config={config}
+        onExported={showToast}
       />
 
       <ShortcutsGuideModal
@@ -2758,6 +3079,38 @@ export default function App() {
         onInsertImage={handleInsertImage}
         onInsertImageSrc={handleInsertImageSrc}
       />
+
+      {/* Autosave restore offer */}
+      {restoreOffer && (
+        <div
+          role="alertdialog"
+          aria-label="자동 저장본 복구"
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-stone-900/95 text-stone-100 border border-amber-500/60 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 text-xs backdrop-blur-md"
+        >
+          <span>
+            자동 저장된 이전 작업이 있습니다{' '}
+            <span className="text-stone-400">
+              ({formatSavedAt(restoreOffer.savedAt)} · 객체 {restoreOffer.elements.length}개 ·{' '}
+              {restoreOffer.config.width}×{restoreOffer.config.height})
+            </span>
+            . 복구할까요? <span className="text-stone-500">결정하기 전에는 자동 저장을 잠시 멈춥니다.</span>
+          </span>
+          <button
+            type="button"
+            onClick={handleRestoreAutosave}
+            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold rounded transition-colors"
+          >
+            복구
+          </button>
+          <button
+            type="button"
+            onClick={handleDiscardAutosave}
+            className="px-3 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded transition-colors"
+          >
+            버리기
+          </button>
+        </div>
+      )}
 
       {/* Floating Toast Notification */}
       {toastMessage && (

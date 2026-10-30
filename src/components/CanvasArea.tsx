@@ -14,9 +14,15 @@ import {
   ShapeStylePreset,
   RadialToolState,
   RadialStep,
+  PathNode,
 } from '../types';
 import { getShapePath, getPolylinePath, finalizePolylineGeometry, getArcPath, computeArcFromChordAndBend, finalizeArcGeometry } from '../utils/shapeGenerators';
 import { getRotationOriginAttr } from '../utils/elementGeometry';
+import { getPathNodesD, isOpenPath, finalizePathGeometry, scalePathNodes } from '../utils/pathNodes';
+import { usePenTool } from '../hooks/usePenTool';
+import { useLassoTool } from '../hooks/useLassoTool';
+import type { LassoAction } from '../utils/lassoSelection';
+import { PenDraftOverlay, LassoOverlay, LassoActionBar, PathNodeEditor, PathEditHint } from './PathTools';
 import { brushPath } from '../utils/svgExport';
 import {
   getArrowHeadPath,
@@ -104,6 +110,11 @@ interface CanvasAreaProps {
   // Group / Ungroup
   onGroup?: () => void;
   onUngroup?: () => void;
+  /** Pen path currently in node-edit mode */
+  pathEditId?: string | null;
+  onSetPathEditId?: (id: string | null) => void;
+  /** Lasso selection command; resolve true to keep the outline */
+  onLassoAction?: (polygon: Point[], action: LassoAction) => Promise<boolean | void> | boolean | void;
 }
 
 /**
@@ -123,7 +134,8 @@ const RadialPreviewItem: React.FC<{ el: CanvasElement }> = ({ el }) => {
     (el.shapeType === 'line' ||
       el.shapeType.startsWith('line-arrow') ||
       el.shapeType === 'polyline' ||
-      el.shapeType === 'arc');
+      el.shapeType === 'arc' ||
+      isOpenPath(el));
 
   return (
     <g transform={flipT} opacity={0.7}>
@@ -133,7 +145,9 @@ const RadialPreviewItem: React.FC<{ el: CanvasElement }> = ({ el }) => {
         >
           <path
             d={
-              el.shapeType === 'polyline' && el.points && el.points.length >= 2
+              el.shapeType === 'path' && el.pathNodes && el.pathNodes.length >= 2
+                ? getPathNodesD(el.pathNodes, !!el.pathClosed)
+                : el.shapeType === 'polyline' && el.points && el.points.length >= 2
                 ? getPolylinePath(el.points)
                 : el.shapeType === 'arc' &&
                   el.points &&
@@ -274,6 +288,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   onRadialSetStep,
   onGroup,
   onUngroup,
+  pathEditId = null,
+  onSetPathEditId,
+  onLassoAction,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 40, y: 40 });
@@ -513,6 +530,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     lineStart?: Point;
     lineEnd?: Point;
     pointsStart?: Point[];
+    pathNodesStart?: PathNode[];
     arcRadiusStart?: number;
   } | null>(null);
 
@@ -859,6 +877,79 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     [config.snapToGrid, config.gridSize]
   );
 
+  const penStroke =
+    lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none'
+      ? lastShapeStyle.stroke
+      : primaryColor || '#000000';
+  const penStrokeWidth =
+    lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0
+      ? lastShapeStyle.strokeWidth
+      : strokeWidth || 2;
+
+  const createPenPath = useCallback(
+    (absNodes: PathNode[], closed: boolean) => {
+      const layer = layers.find((l) => l.id === activeLayerId) || layers[0];
+      if (!layer || !canEditLayer(layer)) return;
+      const geom = finalizePathGeometry(absNodes, closed);
+      const fill = closed && lastShapeStyle.fill && lastShapeStyle.fill !== 'none' ? lastShapeStyle.fill : 'none';
+      const newPath: ShapeElement = {
+        id: 'shape-path-' + Date.now(),
+        layerId: layer.id,
+        name: '펜 패스',
+        type: 'shape',
+        shapeType: 'path',
+        x: geom.x,
+        y: geom.y,
+        width: geom.width,
+        height: geom.height,
+        rotation: 0,
+        opacity: lastShapeStyle.opacity ?? 1,
+        fill,
+        stroke: penStroke,
+        strokeWidth: penStrokeWidth,
+        strokeDash: lastShapeStyle.strokeDash || 'solid',
+        shadow: lastShapeStyle.shadow,
+        pathNodes: geom.pathNodes,
+        pathClosed: closed,
+      };
+      onAddElement(newPath);
+      onSelectElement(newPath.id);
+    },
+    [layers, activeLayerId, lastShapeStyle, penStroke, penStrokeWidth, onAddElement, onSelectElement]
+  );
+
+  const snapPoint = useCallback(
+    (p: Point): Point => (config.snapToGrid ? { x: snapValue(p.x), y: snapValue(p.y) } : p),
+    [config.snapToGrid, snapValue]
+  );
+
+  const pen = usePenTool({
+    active: currentTool === 'pen',
+    inputEnabled: documentInputEnabled,
+    zoom,
+    snap: snapPoint,
+    onCreatePath: createPenPath,
+  });
+
+  const lasso = useLassoTool({
+    active: currentTool === 'lasso',
+    inputEnabled: documentInputEnabled,
+    zoom,
+    onAction: (poly, action) => onLassoAction?.(poly, action),
+  });
+
+  // Node editing only lives while that single path stays selected with the select tool
+  const pathEditElement =
+    pathEditId && currentTool === 'select' && selectedElementIds.length === 1 && selectedElementIds[0] === pathEditId
+      ? (elements.find(
+          (el) => el.id === pathEditId && el.type === 'shape' && el.shapeType === 'path'
+        ) as ShapeElement | undefined) ?? null
+      : null;
+  const pathEditEditable = !!pathEditElement && elementIsEditable(pathEditElement);
+  useEffect(() => {
+    if (pathEditId && !pathEditEditable) onSetPathEditId?.(null);
+  }, [pathEditId, pathEditEditable, onSetPathEditId]);
+
   // Wheel zoom / pan handling
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -910,6 +1001,17 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       } else {
         onUpdateConfig({ backgroundColor: primaryColor });
       }
+      return;
+    }
+
+    if (currentTool === 'pen') {
+      if (!canEditLayer(activeLayer)) return;
+      pen.handleMouseDown(pt, e);
+      return;
+    }
+
+    if (currentTool === 'lasso') {
+      lasso.handleMouseDown(pt, e);
       return;
     }
 
@@ -1109,6 +1211,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       currentTool === 'text' ||
       currentTool === 'crop' ||
       currentTool === 'pan' ||
+      currentTool === 'pen' ||
+      currentTool === 'lasso' ||
       croppingImageId
     ) {
       return;
@@ -1199,6 +1303,11 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   const handleElementDoubleClick = (el: CanvasElement) => {
     if (polylineDraft) {
       finishPolylineDraft();
+      return;
+    }
+    if (el.type === 'shape' && el.shapeType === 'path' && currentTool === 'select') {
+      if (!elementIsEditable(el)) return;
+      onSetPathEditId?.(el.id);
       return;
     }
     if (el.type === 'image' && onStartCropImage) {
@@ -1329,6 +1438,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     const pt = clientToCanvas(e.clientX, e.clientY);
     setCursorPos(pt);
     onMouseMoveCanvas?.(pt);
+
+    if (currentTool === 'pen' && pen.handleMouseMove(pt, e)) return;
+    if (currentTool === 'lasso' && lasso.handleMouseMove(pt)) return;
 
     // Continuous polyline rubber-band cursor
     if (currentTool === 'shape' && selectedShapeType === 'polyline' && polylineDraft) {
@@ -1727,6 +1839,15 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                 })),
               }
             : {}),
+          ...(transformStart.pathNodesStart
+            ? {
+                pathNodes: scalePathNodes(
+                  transformStart.pathNodesStart,
+                  Math.max(10, newW) / Math.max(transformStart.elemW, 1),
+                  Math.max(10, newH) / Math.max(transformStart.elemH, 1)
+                ),
+              }
+            : {}),
           ...(transformStart.arcRadiusStart != null
             ? {
                 arcRadius:
@@ -1747,6 +1868,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     if (isPanning) {
       setIsPanning(false);
     }
+    if (currentTool === 'pen') pen.handleMouseUp();
+    if (currentTool === 'lasso') lasso.handleMouseUp();
 
     // Finish marquee selection
     if (isMarqueeSelecting && marqueeRect) {
@@ -1991,6 +2114,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       case 'line-arrow': return '화살표 선';
       case 'polyline': return '연속 선';
       case 'arc': return '아크';
+      case 'path': return '펜 패스';
     }
   };
 
@@ -2342,6 +2466,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         selectedElement.type === 'shape' && selectedElement.shapeType === 'arc'
           ? selectedElement.arcRadius
           : undefined,
+      pathNodesStart:
+        selectedElement.type === 'shape' && selectedElement.shapeType === 'path'
+          ? selectedElement.pathNodes
+          : undefined,
     });
   };
 
@@ -2641,6 +2769,15 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                                   pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
                                   className={currentTool === 'select' ? 'cursor-pointer' : ''}
                                 />
+                              ) : el.shapeType === 'path' && el.pathNodes && el.pathNodes.length >= 2 ? (
+                                <path
+                                  d={getPathNodesD(el.pathNodes, !!el.pathClosed)}
+                                  fill={el.pathClosed ? 'transparent' : 'none'}
+                                  stroke="transparent"
+                                  strokeWidth={Math.max(el.strokeWidth, el.pathClosed ? 16 : 24)}
+                                  pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
+                                  className={currentTool === 'select' ? 'cursor-pointer' : ''}
+                                />
                               ) : el.shapeType === 'polyline' && el.points && el.points.length >= 2 ? (
                                 <path
                                   d={getPolylinePath(el.points)}
@@ -2682,7 +2819,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                               {/* Visual Visible Shape Path */}
                               <path
                                 d={
-                                  el.shapeType === 'polyline' && el.points && el.points.length >= 2
+                                  el.shapeType === 'path' && el.pathNodes && el.pathNodes.length >= 2
+                                    ? getPathNodesD(el.pathNodes, !!el.pathClosed)
+                                    : el.shapeType === 'polyline' && el.points && el.points.length >= 2
                                     ? getPolylinePath(el.points)
                                     : el.shapeType === 'arc' &&
                                       el.points &&
@@ -2701,7 +2840,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                                   el.shapeType === 'line' ||
                                   el.shapeType === 'line-arrow' ||
                                   el.shapeType === 'polyline' ||
-                                  el.shapeType === 'arc'
+                                  el.shapeType === 'arc' ||
+                                  isOpenPath(el)
                                     ? 'none'
                                     : el.gradient?.enabled
                                     ? `url(#grad-${el.id})`
@@ -2713,7 +2853,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                                   el.shapeType === 'line' ||
                                   el.shapeType === 'line-arrow' ||
                                   el.shapeType === 'polyline' ||
-                                  el.shapeType === 'arc'
+                                  el.shapeType === 'arc' ||
+                                  isOpenPath(el)
                                     ? 'round'
                                     : undefined
                                 }
@@ -2721,7 +2862,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                                   el.shapeType === 'line' ||
                                   el.shapeType === 'line-arrow' ||
                                   el.shapeType === 'polyline' ||
-                                  el.shapeType === 'arc'
+                                  el.shapeType === 'arc' ||
+                                  isOpenPath(el)
                                     ? 'round'
                                     : undefined
                                 }
@@ -3099,6 +3241,22 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             );
           })()}
 
+          {/* Pen (Bezier) draft */}
+          {currentTool === 'pen' && pen.draft && (
+            <PenDraftOverlay draft={pen.draft} zoom={zoom} stroke={penStroke} strokeWidth={penStrokeWidth} />
+          )}
+
+          {/* Lasso outline / selection */}
+          {currentTool === 'lasso' && (
+            <LassoOverlay
+              draft={lasso.draft}
+              mode={lasso.mode}
+              cursor={lasso.cursor}
+              selection={lasso.selection}
+              zoom={zoom}
+            />
+          )}
+
           {/* Continuous Polyline Draft Preview */}
           {polylineDraft && polylineDraft.length > 0 && (() => {
             const stroke =
@@ -3279,6 +3437,18 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           />
         )}
 
+        {/* Pen path node editing */}
+        {pathEditElement && pathEditEditable && (
+          <PathNodeEditor
+            element={pathEditElement}
+            zoom={zoom}
+            inputEnabled={documentInputEnabled}
+            clientToCanvas={clientToCanvas}
+            onChange={(el, opts) => onUpdateElement(el, opts)}
+            onExit={() => onSetPathEditId?.(null)}
+          />
+        )}
+
         {/* Selected LINE Endpoint Handles & Move Overlay (PowerPoint Style) */}
         {currentTool === 'select' && !croppingImageId && selectedLineEndpoints && selectedElement && elementIsEditable(selectedElement) && (
           <div className="absolute inset-0 pointer-events-none z-20">
@@ -3354,6 +3524,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         {/* Selected Non-Line Element Interactive Transform Box (PowerPoint Style Handles) */}
         {currentTool === 'select' &&
           !croppingImageId &&
+          !pathEditElement &&
           selectedElementIds.length === 1 &&
           !selectedLineEndpoints &&
           selectedElement &&
@@ -3374,6 +3545,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             {/* Move handle area */}
             <div
               onMouseDown={(e) => startTransform('move', e)}
+              onDoubleClick={() => handleElementDoubleClick(selectedElement)}
               className="absolute inset-0 cursor-move pointer-events-auto bg-amber-500/5"
               title="드래그하여 이동 (Shift+드래그: 수평/수직만, Shift+클릭: 다중 선택)"
             />
@@ -3833,6 +4005,18 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           )}
         </div>
       )}
+
+      {currentTool === 'lasso' && (
+        <LassoActionBar
+          hasSelection={!!lasso.selection}
+          drawingPolygon={lasso.mode === 'polygon'}
+          busy={lasso.busy}
+          onAction={(action) => void lasso.runAction(action)}
+          onClear={lasso.clear}
+        />
+      )}
+
+      {pathEditElement && pathEditEditable && <PathEditHint onDone={() => onSetPathEditId?.(null)} />}
 
       {/* Image Crop – auto crop notice */}
       {croppingImageId && autoCropNotice && (

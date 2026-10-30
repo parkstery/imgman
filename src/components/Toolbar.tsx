@@ -31,9 +31,12 @@ import {
   X,
   Group,
   Ungroup,
+  PenTool,
+  LassoSelect,
 } from 'lucide-react';
 import { ToolType, ShapeType, CanvasElement } from '../types';
-import { OFFICE_THEME_PALETTES, PAINT_COLORS } from '../utils/colorUtils';
+import { OFFICE_THEME_PALETTES } from '../utils/colorUtils';
+import { ColorPickerPopover } from './ColorPickerPopover';
 import { RadialArrayIcon } from './RadialArrayIcon';
 
 interface ToolbarProps {
@@ -42,7 +45,8 @@ interface ToolbarProps {
   selectedShapeType: ShapeType;
   onSelectShapeType: (shape: ShapeType) => void;
   primaryColor: string;
-  onPrimaryColorChange: (color: string) => void;
+  /** transient = live drag preview from the color picker (no history entry) */
+  onPrimaryColorChange: (color: string, transient?: boolean) => void;
   strokeWidth: number;
   onStrokeWidthChange: (width: number) => void;
   // Group / Ungroup
@@ -100,6 +104,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const [showShapeMenu, setShowShapeMenu] = useState(false);
   const [showArrowMenu, setShowArrowMenu] = useState(false);
   const [showColorPalette, setShowColorPalette] = useState(false);
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const colorPickerBtnRef = useRef<HTMLButtonElement>(null);
   const shapeMenuRef = useRef<HTMLDivElement>(null);
   const arrowMenuRef = useRef<HTMLDivElement>(null);
   const eyedropperBtnRef = useRef<HTMLButtonElement>(null);
@@ -466,6 +472,20 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           )}
         </div>
 
+        {/* Pen (Bezier path) */}
+        <button
+          id="tool-pen"
+          onClick={() => onSelectTool('pen')}
+          className={`p-2 rounded-md transition-colors ${
+            currentTool === 'pen'
+              ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
+              : 'text-stone-300 hover:text-white hover:bg-stone-800'
+          }`}
+          title="펜 도구 (P) — 클릭: 직선 점, 드래그: 곡선 점, 첫 점 클릭: 닫기, 더블클릭/Enter: 완료"
+        >
+          <PenTool className="w-4 h-4" />
+        </button>
+
         {/* Text */}
         <button
           id="tool-text"
@@ -610,6 +630,20 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Crop className="w-4 h-4" />
         </button>
 
+        {/* Lasso selection */}
+        <button
+          id="tool-lasso"
+          onClick={() => onSelectTool('lasso')}
+          className={`p-2 rounded-md transition-colors ${
+            currentTool === 'lasso'
+              ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
+              : 'text-stone-300 hover:text-white hover:bg-stone-800'
+          }`}
+          title="올가미 선택 (L) — 드래그: 자유 곡선, 클릭: 다각형. 선택 후 Ctrl+C 복사 · Ctrl+X 잘라내기 · Ctrl+J 새 이미지 · Delete 지우기"
+        >
+          <LassoSelect className="w-4 h-4" />
+        </button>
+
         {/* Radial Object Tool — create radial arrays of objects */}
         <button
           id="tool-radial"
@@ -685,42 +719,30 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </div>
         </div>
 
-        {/* Primary Color Selector */}
-        <div className="flex items-center space-x-2 pl-2 border-l border-stone-800">
-          {/* Active color preview button with native color input */}
-          <div className="relative group">
-            <label
-              htmlFor="primary-color-input"
-              className="w-7 h-7 rounded border-2 border-stone-600 block shadow-inner cursor-pointer"
-              style={{ backgroundColor: primaryColor }}
-              title="색상 선택 (클릭하여 팔레트 열기)"
+        {/* Primary Color Selector — opens gradient picker + color wheel */}
+        <div className="flex items-center pl-2 border-l border-stone-800">
+          <button
+            ref={colorPickerBtnRef}
+            id="primary-color-button"
+            type="button"
+            onClick={() => setShowColorPicker((v) => !v)}
+            className={`w-7 h-7 rounded border-2 block shadow-inner cursor-pointer transition-colors ${
+              showColorPicker ? 'border-amber-400' : 'border-stone-600 hover:border-stone-400'
+            }`}
+            style={{ backgroundColor: primaryColor }}
+            title={`색상 선택 (${displayColor})`}
+            aria-label="색상 선택"
+            aria-haspopup="dialog"
+            aria-expanded={showColorPicker}
+          />
+          {showColorPicker && (
+            <ColorPickerPopover
+              anchorRef={colorPickerBtnRef}
+              color={primaryColor}
+              onChange={onPrimaryColorChange}
+              onClose={() => setShowColorPicker(false)}
             />
-            <input
-              id="primary-color-input"
-              type="color"
-              value={primaryColor.startsWith('#') ? primaryColor : '#000000'}
-              onChange={(e) => onPrimaryColorChange(e.target.value)}
-              className="opacity-0 absolute -top-1 -left-1 w-0 h-0"
-            />
-          </div>
-
-          {/* Quick Palette (Classic 20 Paint colors in 2 rows) */}
-          <div className="grid grid-cols-10 gap-0.5">
-            {PAINT_COLORS.map((c, i) => (
-              <button
-                key={`${c}-${i}`}
-                id={`palette-color-${i}`}
-                onClick={() => onPrimaryColorChange(c)}
-                className={`w-4 h-4 rounded-sm border ${
-                  primaryColor.toLowerCase() === c.toLowerCase()
-                    ? 'border-amber-400 ring-1 ring-amber-400 scale-110 z-10'
-                    : 'border-stone-700/60 hover:scale-110'
-                } transition-transform`}
-                style={{ backgroundColor: c }}
-                title={c}
-              />
-            ))}
-          </div>
+          )}
         </div>
       </div>
     </div>

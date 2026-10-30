@@ -15,7 +15,15 @@ import {
 import { VectorizeError } from '../utils/rasterVectorizer';
 import { getExportVisibleImageElements } from '../utils/svgExportImages';
 import { exportToRaster, downloadDataUrl } from '../utils/rasterExport';
-import { X, Download, FileCode, Image as ImageIcon, Sparkles, Settings, AlertTriangle, CheckCheck } from 'lucide-react';
+import {
+  clearExportFolder,
+  ensureFolderPermission,
+  loadExportFolder,
+  pickExportFolder,
+  supportsExportFolder,
+  writeToExportFolder,
+} from '../utils/exportFolder';
+import { X, Download, FileCode, Image as ImageIcon, Sparkles, Settings, AlertTriangle, CheckCheck, FolderOpen, RotateCcw } from 'lucide-react';
 import { ModalDialog } from './ModalDialog';
 
 /** Export basename: im-YYMMDD-HHMMSS (e.g. im-261005-064530) */
@@ -28,6 +36,11 @@ function makeExportFilename(date = new Date()): string {
   const mi = pad(date.getMinutes());
   const ss = pad(date.getSeconds());
   return `im-${yy}${mm}${dd}-${hh}${mi}${ss}`;
+}
+
+/** Replaces characters Windows/macOS reject in file names. */
+function sanitizeFileBase(name: string): string {
+  return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/[. ]+$/, '');
 }
 
 /** Human-readable byte size (B / KB / MB). */
@@ -50,6 +63,8 @@ interface ExportModalProps {
   layers: Layer[];
   elements: CanvasElement[];
   config: CanvasConfig;
+  /** Called after a successful export with a short status line. */
+  onExported?: (message: string) => void;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -58,7 +73,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   layers,
   elements,
   config,
+  onExported,
 }) => {
+  const folderSupported = supportsExportFolder();
   const [format, setFormat] = useState<'svg' | 'png' | 'jpeg' | 'webp'>('png');
   const [scale, setScale] = useState<number>(1);
   const [transparent, setTransparent] = useState<boolean>(false);
@@ -70,6 +87,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   const [svgAnalysisBusy, setSvgAnalysisBusy] = useState(false);
+  const [folder, setFolder] = useState<FileSystemDirectoryHandle | null>(null);
+  const [folderBusy, setFolderBusy] = useState(false);
 
   const [svgOptions, setSvgOptions] = useState<SVGExportOptions>({
     rasterHandling: 'preserve',
@@ -101,6 +120,17 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     setExportStatus(null);
     setSvgAnalysis(null);
   }, [isOpen, format, transparent, svgOptions, layers, elements, config]);
+
+  // Restore the remembered export folder once
+  useEffect(() => {
+    let cancelled = false;
+    void loadExportFolder().then((handle) => {
+      if (!cancelled) setFolder(handle);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Generate a live preview when modal opens or settings change (debounced —
   // the preview renders at the real export scale so its byte size doubles as
@@ -136,28 +166,52 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handlePickFolder = async () => {
+    if (folderBusy) return;
+    setFolderBusy(true);
+    setExportError(null);
+    try {
+      const handle = await pickExportFolder(folder);
+      if (handle) setFolder(handle);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : '폴더를 선택하지 못했습니다.');
+    } finally {
+      setFolderBusy(false);
+    }
+  };
+
+  const handleResetFolder = () => {
+    setFolder(null);
+    setExportError(null);
+    void clearExportFolder();
+  };
+
   const handleDownload = async () => {
     setIsGenerating(true);
     setExportError(null);
     setExportStatus(null);
     try {
-      const baseName = filename.trim() || makeExportFilename();
+      const baseName = sanitizeFileBase(filename.trim()) || makeExportFilename();
+      const fileName = `${baseName}.${format}`;
+      // Ask for folder access first, while the click still counts as a user gesture
+      if (folder) await ensureFolderPermission(folder);
+      let svgText: string | null = null;
+      let dataUrl: string | null = null;
+      let vectorizeNote = '';
       if (format === 'svg') {
         const svgOpts = { ...svgOptions, transparentBackground: transparent };
         if (svgOpts.rasterHandling === 'vectorize') {
           setExportStatus('이미지 벡터화 중…');
           const { svg, report } = await generateSVGStringAsync(layers, elements, config, svgOpts);
-          downloadSVGFile(svg, `${baseName}.svg`);
-          setExportStatus(
-            `벡터화 완료: 이미지 ${report.vectorizedImageCount}장, path ${report.pathCount}개` +
-              (report.warnings.length ? ` · 경고 ${report.warnings.length}건` : '')
-          );
+          svgText = svg;
+          vectorizeNote =
+            ` (벡터화: 이미지 ${report.vectorizedImageCount}장, path ${report.pathCount}개` +
+            (report.warnings.length ? `, 경고 ${report.warnings.length}건)` : ')');
         } else {
-          const svgStr = generateSVGString(layers, elements, config, svgOpts);
-          downloadSVGFile(svgStr, `${baseName}.svg`);
+          svgText = generateSVGString(layers, elements, config, svgOpts);
         }
       } else {
-        const dataUrl = await exportToRaster(
+        dataUrl = await exportToRaster(
           layers,
           elements,
           config,
@@ -166,7 +220,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           transparent,
           qualityPct / 100
         );
-        downloadDataUrl(dataUrl, `${baseName}.${format}`);
+      }
+
+      if (folder) {
+        const blob =
+          svgText !== null
+            ? new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' })
+            : await (await fetch(dataUrl!)).blob();
+        const savedName = await writeToExportFolder(folder, fileName, blob);
+        onExported?.(`'${folder.name}' 폴더에 ${savedName} 파일을 저장했습니다.${vectorizeNote}`);
+      } else {
+        if (svgText !== null) downloadSVGFile(svgText, fileName);
+        else downloadDataUrl(dataUrl!, fileName);
+        onExported?.(`${fileName} 파일을 다운로드 폴더로 보냈습니다.${vectorizeNote}`);
       }
       onClose();
     } catch (err) {
@@ -338,6 +404,53 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </label>
               </div>
             )}
+
+            {/* Save Folder */}
+            <div>
+              <label className="text-stone-300 font-medium block mb-1">저장 폴더</label>
+              <div className="flex items-center gap-1.5">
+                <div
+                  id="export-folder-path"
+                  className="flex-1 min-w-0 flex items-center gap-1.5 bg-stone-800/60 border border-stone-700 rounded px-2.5 py-1.5"
+                  title={folder ? folder.name : '브라우저 기본 다운로드 폴더'}
+                >
+                  <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${folder ? 'text-amber-400' : 'text-stone-500'}`} />
+                  <span className={`truncate ${folder ? 'text-stone-100' : 'text-stone-400'}`}>
+                    {folder ? folder.name : '기본 다운로드 폴더'}
+                  </span>
+                </div>
+                {folderSupported && (
+                  <button
+                    id="btn-export-folder"
+                    type="button"
+                    onClick={handlePickFolder}
+                    disabled={folderBusy || isGenerating}
+                    className="shrink-0 px-2.5 py-1.5 rounded border border-stone-700 bg-stone-800 text-stone-200 hover:bg-stone-700 hover:border-stone-600 transition-colors disabled:opacity-50"
+                  >
+                    변경
+                  </button>
+                )}
+                {folder && (
+                  <button
+                    type="button"
+                    onClick={handleResetFolder}
+                    disabled={isGenerating}
+                    title="기본 다운로드 폴더로 되돌리기"
+                    aria-label="기본 다운로드 폴더로 되돌리기"
+                    className="shrink-0 p-1.5 rounded border border-stone-700 bg-stone-800 text-stone-400 hover:text-white hover:bg-stone-700 transition-colors disabled:opacity-50"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <p className="text-[10px] text-stone-500 mt-1">
+                {!folderSupported
+                  ? '이 브라우저는 폴더 선택을 지원하지 않아 브라우저 설정의 다운로드 폴더에 저장됩니다. (Chrome/Edge에서 변경 가능)'
+                  : folder
+                    ? '보안상 브라우저는 폴더 이름만 알려 줍니다. 같은 이름의 파일이 있으면 번호를 붙여 저장합니다.'
+                    : '브라우저 설정의 다운로드 폴더에 저장됩니다. [변경]으로 다른 폴더를 고르면 다음에도 기억합니다.'}
+              </p>
+            </div>
 
             {/* File Name */}
             <div>
@@ -583,7 +696,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 ? svgOptions.rasterHandling === 'vectorize' && format === 'svg'
                   ? '벡터화 중...'
                   : '생성 중...'
-                : '파일 다운로드'}
+                : folder
+                  ? '폴더에 저장'
+                  : '파일 다운로드'}
             </span>
           </button>
         </div>

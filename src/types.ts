@@ -18,7 +18,8 @@ export type ShapeType =
   | 'line-arrow-dot'
   | 'line-arrow-diamond'
   | 'polyline'
-  | 'arc';
+  | 'arc'
+  | 'path';
 
 export type ElementType = 'shape' | 'brush' | 'text' | 'image';
 
@@ -97,6 +98,10 @@ export interface ShapeElement extends BaseElement {
   arcLarge?: boolean;
   /** SVG sweep-flag (direction) */
   arcSweep?: boolean;
+  /** Bezier anchors for shapeType 'path' (coords relative to element x/y) */
+  pathNodes?: PathNode[];
+  /** Closed paths get a Z and are filled */
+  pathClosed?: boolean;
   
   // PowerPoint-style arrow line properties (for line/arrow types)
   /** Line cap style for arrow lines */
@@ -110,6 +115,14 @@ export interface ShapeElement extends BaseElement {
 export interface Point {
   x: number;
   y: number;
+}
+
+/** One anchor of a pen path. Handles are absolute positions in the same space as x/y. */
+export interface PathNode {
+  x: number;
+  y: number;
+  handleIn?: Point;
+  handleOut?: Point;
 }
 
 export interface BrushStrokeElement extends BaseElement {
@@ -180,7 +193,9 @@ export type ToolType =
   | 'eyedropper'
   | 'fill'
   | 'crop'
-  | 'radial';
+  | 'radial'
+  | 'pen'
+  | 'lasso';
 
 export interface CanvasConfig {
   width: number;

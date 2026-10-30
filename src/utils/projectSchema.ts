@@ -30,6 +30,7 @@ const SHAPE_TYPES: ShapeType[] = [
   'line-arrow-diamond',
   'polyline',
   'arc',
+  'path',
 ];
 
 const STROKE_DASH = ['solid', 'dashed', 'dotted'] as const;
@@ -190,6 +191,36 @@ function validatePoints(
   }
 }
 
+function isFinitePoint(p: unknown): boolean {
+  return isObj(p) && isFiniteNumber(p.x) && isFiniteNumber(p.y);
+}
+
+function validatePathNodes(raw: unknown, label: string, errors: string[], required: boolean): void {
+  if (raw === undefined) {
+    if (required) errors.push(`${label}.pathNodes가 필요합니다.`);
+    return;
+  }
+  if (!Array.isArray(raw)) {
+    errors.push(`${label}.pathNodes가 배열이 아닙니다.`);
+    return;
+  }
+  if (raw.length < 2) {
+    errors.push(`${label}.pathNodes가 2개 이상이어야 합니다.`);
+    return;
+  }
+  for (let i = 0; i < raw.length; i++) {
+    const n = raw[i];
+    if (
+      !isFinitePoint(n) ||
+      ((n as Record<string, unknown>).handleIn !== undefined && !isFinitePoint((n as Record<string, unknown>).handleIn)) ||
+      ((n as Record<string, unknown>).handleOut !== undefined && !isFinitePoint((n as Record<string, unknown>).handleOut))
+    ) {
+      errors.push(`${label}.pathNodes[${i}]가 유효한 노드가 아닙니다.`);
+      break;
+    }
+  }
+}
+
 function validateShadow(raw: unknown, label: string, errors: string[]): void {
   if (raw === undefined) return;
   if (!isObj(raw)) {
@@ -309,6 +340,8 @@ function validateElement(
     }
     const needsPoints = raw.shapeType === 'polyline' || raw.shapeType === 'arc';
     validatePoints(raw.points, label, errors, needsPoints ? 2 : undefined);
+    validatePathNodes(raw.pathNodes, label, errors, raw.shapeType === 'path');
+    optionalBoolean(raw, 'pathClosed', label, errors);
     validateGradient(raw.gradient, label, errors);
     if (raw.cornerRadius !== undefined && !isFiniteNumber(raw.cornerRadius)) {
       errors.push(`${label}.cornerRadius가 유한한 수가 아닙니다.`);

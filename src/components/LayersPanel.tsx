@@ -22,6 +22,7 @@ import {
   Check,
   PanelLeftClose,
   PanelLeftOpen,
+  History,
 } from 'lucide-react';
 
 interface LayersPanelProps {
@@ -41,6 +42,9 @@ interface LayersPanelProps {
   onSelectElement: (id: string | null) => void;
   isOpen?: boolean;
   onToggleCollapse?: () => void;
+  /** Rendered in the "History" tab */
+  historyPanel?: React.ReactNode;
+  historyCount?: number;
 }
 
 export const LayersPanel: React.FC<LayersPanelProps> = ({
@@ -60,8 +64,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   onSelectElement,
   isOpen = true,
   onToggleCollapse,
+  historyPanel,
+  historyCount,
 }) => {
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
+  const [tab, setTab] = useState<'layers' | 'history'>('layers');
   const [editingName, setEditingName] = useState('');
 
   const activeLayer = layers.find((l) => l.id === activeLayerId) || layers[0];
@@ -152,10 +159,38 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     <aside className="w-64 min-h-0 h-full bg-stone-900 border-r border-stone-800 text-stone-200 flex flex-col shrink-0 select-none text-xs">
       {/* Title row — always a single horizontal line */}
       <div className="px-3 pt-3 pb-1.5 border-b border-stone-800/80 flex items-center justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-1.5 min-w-0 font-semibold text-stone-100 whitespace-nowrap">
-          <Layers className="w-4 h-4 text-amber-400 shrink-0" />
-          <span className="text-sm tracking-wide">Layer</span>
-          <span className="text-[10px] text-stone-400 font-normal">({layers.length})</span>
+        <div className="flex items-center gap-1 min-w-0 font-semibold whitespace-nowrap" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'layers'}
+            onClick={() => setTab('layers')}
+            className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded transition-colors ${
+              tab === 'layers' ? 'text-stone-100' : 'text-stone-500 hover:text-stone-300'
+            }`}
+          >
+            <Layers className={`w-4 h-4 shrink-0 ${tab === 'layers' ? 'text-amber-400' : ''}`} />
+            <span className="text-sm tracking-wide">Layer</span>
+            <span className="text-[10px] text-stone-400 font-normal">({layers.length})</span>
+          </button>
+          {historyPanel && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'history'}
+              onClick={() => setTab('history')}
+              className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded transition-colors ${
+                tab === 'history' ? 'text-stone-100' : 'text-stone-500 hover:text-stone-300'
+              }`}
+              title="작업 내역 — 클릭해서 원하는 단계로 돌아가기"
+            >
+              <History className={`w-4 h-4 shrink-0 ${tab === 'history' ? 'text-amber-400' : ''}`} />
+              <span className="text-sm tracking-wide">History</span>
+              {historyCount != null && (
+                <span className="text-[10px] text-stone-400 font-normal">({historyCount})</span>
+              )}
+            </button>
+          )}
         </div>
         {onToggleCollapse && (
           <button
@@ -169,6 +204,10 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         )}
       </div>
 
+      {tab === 'history' && historyPanel ? (
+        historyPanel
+      ) : (
+      <>
       {/* Action controls on their own row so the title never wraps vertically */}
       <div className="px-2 py-1.5 border-b border-stone-800 flex items-center justify-end flex-wrap gap-0.5 shrink-0">
           {/* Single reorder pair for the active (selected) layer */}
@@ -439,6 +478,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             className="w-full accent-amber-500 cursor-pointer"
           />
         </div>
+      )}
+      </>
       )}
     </aside>
   );

@@ -14,6 +14,7 @@ import {
 import { FONT_FAMILIES } from '../utils/colorUtils';
 import { finalizeArcGeometry } from '../utils/shapeGenerators';
 import { getArrowPreset } from '../utils/arrowUtils';
+import { canConvertToPath, refitPathElement } from '../utils/pathNodes';
 import {
   AlignLeft,
   AlignCenter,
@@ -121,6 +122,10 @@ interface PropertiesPanelProps {
   onRadialCancel?: () => void;
   /** Start the radial tool with the currently selected element */
   onCreateRadialArray?: (source: CanvasElement) => void;
+  // Pen paths
+  isPathEditing?: boolean;
+  onTogglePathEdit?: () => void;
+  onConvertToPath?: (el: CanvasElement) => void;
 }
 
 export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
@@ -162,6 +167,9 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   onRadialConfirm,
   onRadialCancel,
   onCreateRadialArray,
+  isPathEditing = false,
+  onTogglePathEdit,
+  onConvertToPath,
 }) => {
   const [canvasWidthDraft, setCanvasWidthDraft] = useState(String(config.width));
   const [canvasHeightDraft, setCanvasHeightDraft] = useState(String(config.height));
@@ -414,7 +422,9 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     (shape?.shapeType === 'line' ||
       shape?.shapeType.startsWith('line-arrow') ||
       shape?.shapeType === 'polyline' ||
-      shape?.shapeType === 'arc');
+      shape?.shapeType === 'arc' ||
+      (shape?.shapeType === 'path' && !shape.pathClosed));
+  const isPath = isShape && shape?.shapeType === 'path';
   const isStraightLine = isShape && (shape?.shapeType === 'line' || shape?.shapeType.startsWith('line-arrow'));
   const isArc = isShape && shape?.shapeType === 'arc';
   const isText = selectedElement.type === 'text';
@@ -1539,6 +1549,64 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 className="w-full accent-amber-500"
               />
             </div>
+          )}
+        </PropertyGroup>
+      )}
+
+      {/* PEN PATH: node editing / conversion */}
+      {isShape && shape && (isPath || canConvertToPath(shape)) && (
+        <PropertyGroup title="패스 (점 편집)">
+          {isPath ? (
+            <>
+              <button
+                type="button"
+                onClick={onTogglePathEdit}
+                disabled={isElementLocked}
+                className={`w-full px-2 py-1.5 rounded text-[11px] font-semibold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isPathEditing
+                    ? 'bg-amber-500 text-stone-950 border-amber-400'
+                    : 'bg-stone-800 text-stone-200 border-stone-700 hover:bg-stone-700'
+                }`}
+                title="캔버스에서 패스를 더블클릭해도 점 편집을 시작합니다"
+              >
+                {isPathEditing ? '점 편집 끝내기 (Esc)' : '점 편집 시작'}
+              </button>
+              <label className="flex items-center justify-between text-[11px] text-stone-400">
+                <span>닫힌 패스 (채우기 가능)</span>
+                <input
+                  type="checkbox"
+                  checked={!!shape.pathClosed}
+                  disabled={isElementLocked}
+                  onChange={(e) =>
+                    onUpdateElement(
+                      refitPathElement({
+                        ...shape,
+                        pathClosed: e.target.checked,
+                        fill: e.target.checked ? shape.fill : 'none',
+                      })
+                    )
+                  }
+                  className="accent-amber-500"
+                />
+              </label>
+              <p className="text-[10px] text-stone-500 leading-snug">
+                점 {shape.pathNodes?.length ?? 0}개 · 선 더블클릭: 점 추가 · 점 더블클릭: 곡선↔직선 · Delete: 선택한 점 삭제
+              </p>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => onConvertToPath?.(shape)}
+                disabled={isElementLocked}
+                className="w-full px-2 py-1.5 rounded text-[11px] font-semibold bg-stone-800 text-stone-200 border border-stone-700 hover:bg-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                패스로 변환해 점 편집
+              </button>
+              <p className="text-[10px] text-stone-500 leading-snug">
+                모양은 그대로 두고 꼭짓점·곡선을 직접 고칠 수 있는 펜 패스로 바꿉니다. Ctrl+Z로 되돌릴 수 있습니다.
+              </p>
+            </>
           )}
         </PropertyGroup>
       )}

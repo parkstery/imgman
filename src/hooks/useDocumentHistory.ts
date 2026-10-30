@@ -54,6 +54,17 @@ export function redoHistory(
   };
 }
 
+export function jumpToHistory(
+  state: HistoryState,
+  index: number
+): { state: HistoryState; snapshot: HistorySnapshot } | null {
+  if (index < 0 || index >= state.snapshots.length || index === state.index) return null;
+  return {
+    state: { snapshots: state.snapshots, index },
+    snapshot: cloneSnapshot(state.snapshots[index]),
+  };
+}
+
 export function resetHistory(snapshot: HistorySnapshot): HistoryState {
   return { snapshots: [cloneSnapshot(snapshot)], index: 0 };
 }
@@ -88,6 +99,15 @@ export function useDocumentHistory(initial: HistorySnapshot) {
     return result.snapshot;
   }, []);
 
+  const jumpTo = useCallback((index: number): HistorySnapshot | null => {
+    const result = jumpToHistory(historyRef.current, index);
+    if (!result) return null;
+    historyRef.current = result.state;
+    setHistory(result.state);
+    rememberDocument(result.snapshot);
+    return result.snapshot;
+  }, []);
+
   const reset = useCallback((snapshot: HistorySnapshot) => {
     const next = resetHistory(snapshot);
     historyRef.current = next;
@@ -102,6 +122,7 @@ export function useDocumentHistory(initial: HistorySnapshot) {
     commit,
     undo,
     redo,
+    jumpTo,
     reset,
   };
 }

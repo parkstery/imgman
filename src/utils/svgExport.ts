@@ -1,5 +1,6 @@
 import { CanvasConfig, CanvasElement, Layer, ShapeElement, ImageElement } from '../types';
 import { getShapePath, getPolylinePath, getArcPath } from './shapeGenerators';
+import { getPathNodesD, isOpenPath } from './pathNodes';
 import {
   getArrowHeadPath,
   getArrowHeadRotateDeg,
@@ -404,7 +405,8 @@ function assembleSvgString(
             el.shapeType === 'line' ||
             el.shapeType.startsWith('line-arrow') ||
             el.shapeType === 'polyline' ||
-            el.shapeType === 'arc';
+            el.shapeType === 'arc' ||
+            isOpenPath(el);
 
           let dashAttr = '';
           if (el.strokeDash === 'dashed') dashAttr = ' stroke-dasharray="8 6"';
@@ -462,7 +464,9 @@ function assembleSvgString(
           }
 
           let pathD = '';
-          if (el.shapeType === 'polyline' && el.points && el.points.length >= 2) {
+          if (el.shapeType === 'path' && el.pathNodes && el.pathNodes.length >= 2) {
+            pathD = getPathNodesD(el.pathNodes, !!el.pathClosed);
+          } else if (el.shapeType === 'polyline' && el.points && el.points.length >= 2) {
             pathD = polylinePath(
               el.points,
               opts.simplifyTolerance > 0,

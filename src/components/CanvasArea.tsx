@@ -59,7 +59,6 @@ interface CanvasAreaProps {
   onCropCanvas?: (crop: { x: number; y: number; w: number; h: number }) => void;
   onCutCanvasRegion?: (crop: { x: number; y: number; w: number; h: number }) => Promise<void> | void;
   onCopyCanvasRegion?: (crop: { x: number; y: number; w: number; h: number }) => Promise<void> | void;
-  onTriggerPaste?: () => void;
   onMouseMoveCanvas?: (pt: Point) => void;
   onCopyImagePart?: (imgElem: ImageElement, crop: { x: number; y: number; w: number; h: number }) => void;
   onCutImagePart?: (imgElem: ImageElement, crop: { x: number; y: number; w: number; h: number }) => void;
@@ -248,7 +247,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   onCropCanvas,
   onCutCanvasRegion,
   onCopyCanvasRegion,
-  onTriggerPaste,
   onMouseMoveCanvas,
   onCopyImagePart,
   onCutImagePart,
@@ -2401,11 +2399,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         handleCopyCrop();
         return;
       }
-      // Paste: Ctrl+V or Cmd+V
+      // Paste: Ctrl+V or Cmd+V — do NOT preventDefault: the native 'paste' event
+      // carries the OS clipboard (Win+Shift+S captures) without a permission
+      // prompt; App's paste listener handles it. Just leave crop-box mode.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
-        e.preventDefault();
-        e.stopPropagation();
-        onTriggerPaste?.();
         setCropBox(null);
         return;
       }
@@ -2419,7 +2416,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     };
     window.addEventListener('keydown', handleCropKeyDown);
     return () => window.removeEventListener('keydown', handleCropKeyDown);
-  }, [currentTool, cropBox, applyCrop, onSelectTool, handleCutCrop, handleCopyCrop, onTriggerPaste, documentInputEnabled]);
+  }, [currentTool, cropBox, applyCrop, onSelectTool, handleCutCrop, handleCopyCrop, documentInputEnabled]);
 
   // Start handle transform
   const startTransform = (handle: HandleType | 'move', e: React.MouseEvent) => {

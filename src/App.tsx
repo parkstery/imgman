@@ -56,6 +56,17 @@ import {
 import { cloneElements, remapRadialInstanceGroups } from './utils/cloneElements';
 import { convertShapeToPath } from './utils/pathNodes';
 import {
+  type ImageFingerprint,
+  ClipboardSourceError,
+  canWriteImagesToSystemClipboard,
+  computeImageFingerprint,
+  dataUrlToBlob,
+  extractImageFileFromDataTransfer,
+  fingerprintsMatch,
+  readImageBlobFromClipboard,
+  writePngToSystemClipboard,
+} from './utils/clipboardImage';
+import {
   LassoAction,
   clippedPolygonBounds,
   elementTouchesRect,
@@ -210,31 +221,43 @@ export default function App() {
     elements?: CanvasElement[];
   } | null>(null);
 
-  // Size of the last PNG we exported to the OS clipboard (null = we didn't).
-  // Used to tell "our own leftover export" apart from a NEW OS screenshot on paste.
-  const lastWrittenPngSizeRef = useRef<number | null>(null);
+  // Pixel fingerprint of the last PNG we exported to the OS clipboard.
+  // Chromium re-encodes clipboard PNGs, so byte size cannot identify our own
+  // export; pixels can. Matching image on paste = "our leftover export" → paste
+  // the app-internal clip (keeps origin+10px, vector elements). Anything else
+  // (Win+Shift+S, Snipping Tool, another app) is a NEW external image and wins.
+  const lastWrittenFingerprintRef = useRef<Promise<ImageFingerprint | null> | null>(null);
+  const clipboardWriteSeqRef = useRef(0);
 
-  // Export a PNG blob to the OS clipboard so OTHER apps can paste it.
+  // Export a PNG to the OS clipboard so OTHER apps can paste it.
+  // Accepts a promise so callers can start the write BEFORE slow raster work.
   // Returns true when the OS-level write actually succeeded.
   const writeImageBlobToSystemClipboard = useCallback(
-    async (blob: Blob | null | undefined): Promise<boolean> => {
-      lastWrittenPngSizeRef.current = null;
-      if (!blob) return false;
-      if (navigator.clipboard && window.ClipboardItem) {
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-          lastWrittenPngSizeRef.current = blob.size;
-          return true;
-        } catch (e) {
-          console.warn('System clipboard write failed:', e);
-          showToast(
-            '시스템 클립보드 복사가 거부되었습니다. 앱 화면을 마우스로 클릭해 포커스를 준 뒤 다시 시도하세요.'
-          );
-          return false;
-        }
+    async (png: Blob | null | undefined | Promise<Blob | null | undefined>): Promise<boolean> => {
+      const seq = ++clipboardWriteSeqRef.current;
+      if (!canWriteImagesToSystemClipboard()) {
+        await Promise.resolve(png).catch(() => null);
+        showToast(
+          window.isSecureContext
+            ? '이 브라우저는 시스템 클립보드로 PNG 내보내기를 지원하지 않습니다. Chrome/Edge를 권장합니다.'
+            : '보안 연결(HTTPS 또는 localhost)이 아니라서 시스템 클립보드에 이미지를 쓸 수 없습니다. http://localhost 주소로 접속하세요.'
+        );
+        return false;
       }
-      showToast('이 브라우저는 시스템 클립보드로 PNG 내보내기를 지원하지 않습니다. Chrome/Edge를 권장합니다.');
-      return false;
+      try {
+        const written = await writePngToSystemClipboard(png);
+        if (seq === clipboardWriteSeqRef.current) {
+          lastWrittenFingerprintRef.current = computeImageFingerprint(written);
+        }
+        return true;
+      } catch (e) {
+        if (e instanceof ClipboardSourceError) return false;
+        console.warn('System clipboard write failed:', e);
+        showToast(
+          '시스템 클립보드 복사가 거부되었습니다. 앱 화면을 마우스로 클릭해 포커스를 준 뒤 다시 시도하세요.'
+        );
+        return false;
+      }
     },
     [showToast]
   );
@@ -1246,14 +1269,10 @@ export default function App() {
     async (region: { x: number; y: number; w: number; h: number }) => {
       if (region.w < 5 || region.h < 5) return;
       try {
-        const { dataUrl, blob } = await exportRegionToRaster(
-          layers,
-          elements,
-          config,
-          region,
-          1,
-          false
-        );
+        const rasterPromise = exportRegionToRaster(layers, elements, config, region, 1, false);
+        // Start the OS clipboard write now, while the page still has focus.
+        const systemWrite = writeImageBlobToSystemClipboard(rasterPromise.then((r) => r.blob));
+        const { dataUrl } = await rasterPromise;
 
         const sliceW = Math.round(region.w);
         const sliceH = Math.round(region.h);
@@ -1273,9 +1292,7 @@ export default function App() {
           },
         };
 
-        if (blob) {
-          await writeImageBlobToSystemClipboard(blob);
-        }
+        await systemWrite;
 
         const regRight = region.x + region.w;
         const regBottom = region.y + region.h;
@@ -1334,14 +1351,10 @@ export default function App() {
     async (region: { x: number; y: number; w: number; h: number }) => {
       if (region.w < 5 || region.h < 5) return;
       try {
-        const { dataUrl, blob } = await exportRegionToRaster(
-          layers,
-          elements,
-          config,
-          region,
-          1,
-          false
-        );
+        const rasterPromise = exportRegionToRaster(layers, elements, config, region, 1, false);
+        // Start the OS clipboard write now, while the page still has focus.
+        const systemWrite = writeImageBlobToSystemClipboard(rasterPromise.then((r) => r.blob));
+        const { dataUrl } = await rasterPromise;
 
         internalClipboardRef.current = {
           type: 'image-slice',
@@ -1356,9 +1369,12 @@ export default function App() {
           },
         };
 
-        await writeImageBlobToSystemClipboard(blob);
+        const copiedToSystem = await systemWrite;
 
-        showToast('지정한 화면 영역을 캡쳐 복사했습니다. (Ctrl+V로 붙여넣기)');
+        // On failure the write helper already explained why (focus, HTTP, …).
+        if (copiedToSystem) {
+          showToast('지정한 화면 영역을 캡쳐 복사했습니다. (imgman·외부 앱에서 Ctrl+V로 붙여넣기)');
+        }
       } catch (err) {
         console.error('Failed to capture region:', err);
         showToast('영역 캡쳐 중 오류가 발생했습니다.');
@@ -1381,7 +1397,6 @@ export default function App() {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText('').catch(() => {});
     }
-    lastWrittenPngSizeRef.current = null;
     showToast(`${selected.length}개 객체가 복사되었습니다. (Ctrl+V로 붙여넣기)`);
   }, [elements, selectedElementIds, showToast]);
 
@@ -1401,7 +1416,6 @@ export default function App() {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText('').catch(() => {});
     }
-    lastWrittenPngSizeRef.current = null;
     handleDeleteSelectedElements();
     showToast(`${selected.length}개 객체를 잘라냈습니다. (Ctrl+V로 붙여넣기)`);
   }, [elements, selectedElementIds, layers, handleDeleteSelectedElements, showToast]);
@@ -1439,9 +1453,16 @@ export default function App() {
       }
       try {
         let piece: { dataUrl: string; blob: Blob | null } | null = null;
+        let systemWrite: Promise<boolean> | null = null;
         if (action !== 'erase') {
-          const raster = await exportRegionToRaster(layers, elementsRef.current, config, region, 1, false);
-          piece = await maskDataUrlWithPolygon(raster.dataUrl, region, polygon);
+          const piecePromise = exportRegionToRaster(layers, elementsRef.current, config, region, 1, false).then(
+            (raster) => maskDataUrlWithPolygon(raster.dataUrl, region, polygon)
+          );
+          if (action === 'copy' || action === 'cut') {
+            // Start the OS clipboard write now, while the page still has focus.
+            systemWrite = writeImageBlobToSystemClipboard(piecePromise.then((p) => p.blob));
+          }
+          piece = await piecePromise;
         }
 
         if (piece && (action === 'copy' || action === 'cut')) {
@@ -1457,7 +1478,7 @@ export default function App() {
               suggestedY: region.y + PASTE_OFFSET_PX,
             },
           };
-          await writeImageBlobToSystemClipboard(piece.blob);
+          await systemWrite;
         }
         if (action === 'copy') {
           showToast('올가미 영역을 복사했습니다. (Ctrl+V로 붙여넣기)');
@@ -1548,7 +1569,10 @@ export default function App() {
     async (imgElem: ImageElement, crop: { x: number; y: number; w: number; h: number }) => {
       if (crop.w < 5 || crop.h < 5) return;
       try {
-        const slice = await extractImageSlice(imgElem, crop);
+        const slicePromise = extractImageSlice(imgElem, crop);
+        // Start the OS clipboard write now, while the page still has focus.
+        const systemWrite = writeImageBlobToSystemClipboard(slicePromise.then((s) => dataUrlToBlob(s.src)));
+        const slice = await slicePromise;
 
         internalClipboardRef.current = {
           type: 'image-slice',
@@ -1563,13 +1587,9 @@ export default function App() {
           },
         };
 
-        if (navigator.clipboard && window.ClipboardItem) {
-          const res = await fetch(slice.src);
-          const sliceBlob = await res.blob();
-          await writeImageBlobToSystemClipboard(sliceBlob);
+        if (await systemWrite) {
+          showToast('선택한 이미지 영역을 복사했습니다. (imgman·외부 앱에서 Ctrl+V로 붙여넣기)');
         }
-
-        showToast('선택한 이미지 영역을 복사했습니다. (Ctrl+V로 붙여넣기)');
       } catch (err) {
         console.error('Failed to copy image part:', err);
         showToast('이미지 복사 중 오류가 발생했습니다.');
@@ -1585,10 +1605,10 @@ export default function App() {
       if (crop.w < 5 || crop.h < 5) return;
       if (!canEditElement(imgElem, layers)) return;
       try {
-        const [slice, punched] = await Promise.all([
-          extractImageSlice(imgElem, crop),
-          punchHoleInImageElement(imgElem, crop),
-        ]);
+        const slicePromise = extractImageSlice(imgElem, crop);
+        // Start the OS clipboard write now, while the page still has focus.
+        const systemWrite = writeImageBlobToSystemClipboard(slicePromise.then((s) => dataUrlToBlob(s.src)));
+        const [slice, punched] = await Promise.all([slicePromise, punchHoleInImageElement(imgElem, crop)]);
 
         const pieceX = Math.round(imgElem.x + crop.x);
         const pieceY = Math.round(imgElem.y + crop.y);
@@ -1608,11 +1628,7 @@ export default function App() {
           },
         };
 
-        if (navigator.clipboard && window.ClipboardItem) {
-          const res = await fetch(slice.src);
-          const sliceBlob = await res.blob();
-          await writeImageBlobToSystemClipboard(sliceBlob);
-        }
+        await systemWrite;
 
         const next = elementsRef.current.map((el) => (el.id === imgElem.id ? punched : el));
         elementsRef.current = next;
@@ -2125,26 +2141,37 @@ export default function App() {
     return false;
   }, [activeLayerId, config, layers, pushHistory, showToast]);
 
-  // Read image/text from the OS clipboard (Windows screenshot, Snipping Tool, etc.)
-  const handlePasteFromClipboard = useCallback(async (): Promise<boolean> => {
-    if (navigator.clipboard && navigator.clipboard.read) {
-      try {
-        const items = await navigator.clipboard.read();
-        for (const item of items) {
-          const imageType = item.types.find((t) => t.startsWith('image/'));
-          if (imageType) {
-            const blob = await item.getType(imageType);
-            const file = new File([blob], 'clipboard-image.png', { type: imageType });
-            handleInsertImage(file);
-            return true;
-          }
-        }
-      } catch (err) {
-        console.warn('Clipboard read() failed:', err);
+  // An OS clipboard image is either our own leftover export (pixels match what
+  // we last wrote → paste the internal clip: origin+10px slice / vector
+  // elements) or NEW external content (Win+Shift+S, Snipping Tool, another app)
+  // which must win over the internal clip.
+  const pasteOsImageOrInternal = useCallback(
+    async (osImage: Blob): Promise<void> => {
+      const ownWrite = lastWrittenFingerprintRef.current;
+      if (internalClipboardRef.current && ownWrite) {
+        const [own, incoming] = await Promise.all([ownWrite, computeImageFingerprint(osImage)]);
+        if (fingerprintsMatch(own, incoming) && pasteFromInternalClipboard()) return;
       }
+      const file =
+        osImage instanceof File
+          ? osImage
+          : new File([osImage], 'clipboard-image.png', { type: osImage.type || 'image/png' });
+      handleInsertImage(file);
+    },
+    [handleInsertImage, pasteFromInternalClipboard]
+  );
+
+  // Toolbar / menu paste (no native paste event → async Clipboard API).
+  const handlePasteAction = useCallback(async () => {
+    const osImage = await readImageBlobFromClipboard();
+    if (osImage) {
+      await pasteOsImageOrInternal(osImage);
+      return;
     }
 
-    if (navigator.clipboard && navigator.clipboard.readText) {
+    if (pasteFromInternalClipboard()) return;
+
+    if (navigator.clipboard?.readText) {
       try {
         const text = (await navigator.clipboard.readText()).trim();
         if (
@@ -2152,61 +2179,18 @@ export default function App() {
           /^https?:\/\/.+\.(png|jpe?g|webp|gif|svg|bmp|avif)(\?.*)?$/i.test(text)
         ) {
           handleInsertImageSrc(text, '클립보드 이미지');
-          return true;
+          return;
         }
       } catch (err) {
         console.warn('Clipboard readText() failed:', err);
       }
     }
 
-    return false;
-  }, [handleInsertImage, handleInsertImageSrc]);
-
-  // Unified Paste: app internal clipboard first (crop slice keeps origin+10px),
-  // then OS clipboard (screenshots, etc.)
-  const handlePasteAction = useCallback(async () => {
-    if (pasteFromInternalClipboard()) return;
-
-    const fromSystem = await handlePasteFromClipboard();
-    if (fromSystem) return;
-
     setIsClipboardGuideOpen(true);
-  }, [handlePasteFromClipboard, pasteFromInternalClipboard]);
+  }, [handleInsertImageSrc, pasteFromInternalClipboard, pasteOsImageOrInternal]);
 
-  // Global Clipboard Paste (Ctrl+V): OS image first, then internal clipboard
+  // Global Clipboard Paste (Ctrl+V): OS image (unless it is our own export), then internal clipboard
   useEffect(() => {
-    const extractImageFileFromClipboard = (clipboardData: DataTransfer): File | null => {
-      if (clipboardData.files && clipboardData.files.length > 0) {
-        for (let i = 0; i < clipboardData.files.length; i++) {
-          const file = clipboardData.files[i];
-          if (
-            file.type.startsWith('image/') ||
-            /\.(png|jpe?g|webp|gif|svg|bmp|ico|avif)$/i.test(file.name)
-          ) {
-            return file;
-          }
-        }
-      }
-
-      if (clipboardData.items && clipboardData.items.length > 0) {
-        for (let i = 0; i < clipboardData.items.length; i++) {
-          const item = clipboardData.items[i];
-          if (item.type.indexOf('image') !== -1 || item.kind === 'file') {
-            const file = item.getAsFile();
-            if (
-              file &&
-              (file.type.startsWith('image/') ||
-                /\.(png|jpe?g|webp|gif|svg|bmp|ico|avif)$/i.test(file.name) ||
-                file.size > 0)
-            ) {
-              return file;
-            }
-          }
-        }
-      }
-      return null;
-    };
-
     const handlePaste = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement;
       // Clipboard guide owns paste; do not preventDefault so the zone can receive it.
@@ -2227,35 +2211,21 @@ export default function App() {
       const clipboardData = e.clipboardData;
       if (!clipboardData) return;
 
-      // 1) App-internal cut/copy first — crop slices use origin + 10px offset.
-      //    Those copies also export the same PNG to the OS clipboard, so an equal
-      //    size file means "our own leftover export" → paste app-internal content.
-      //    But a NEW OS screenshot (Snipping Tool etc.) has different bytes → it
-      //    must win, otherwise Windows captures could never be pasted in.
-      if (internalClipboardRef.current) {
-        const pendingImageFile = extractImageFileFromClipboard(clipboardData);
-        if (
-          pendingImageFile &&
-          lastWrittenPngSizeRef.current !== null &&
-          pendingImageFile.size !== lastWrittenPngSizeRef.current
-        ) {
-          e.preventDefault();
-          e.stopPropagation();
-          handleInsertImage(pendingImageFile);
-          return;
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        pasteFromInternalClipboard();
-        return;
-      }
-
-      // 2) Windows / OS clipboard image (Snipping Tool, Win+Shift+S, Explorer copy, etc.)
-      const imageFile = extractImageFileFromClipboard(clipboardData);
+      // 1) OS clipboard image (Win+Shift+S, Snipping Tool, Explorer copy, other apps,
+      //    or our own crop export — pasteOsImageOrInternal tells them apart).
+      const imageFile = extractImageFileFromDataTransfer(clipboardData);
       if (imageFile) {
         e.preventDefault();
         e.stopPropagation();
-        handleInsertImage(imageFile);
+        void pasteOsImageOrInternal(imageFile);
+        return;
+      }
+
+      // 2) App-internal cut/copy (objects, or a slice whose OS export was replaced by text).
+      if (internalClipboardRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        pasteFromInternalClipboard();
         return;
       }
 
@@ -2295,9 +2265,9 @@ export default function App() {
       document.removeEventListener('paste', handlePaste, true);
     };
   }, [
-    handleInsertImage,
     handleInsertImageSrc,
     pasteFromInternalClipboard,
+    pasteOsImageOrInternal,
     isExportOpen,
     isShortcutsOpen,
     isNewCanvasOpen,
@@ -2661,17 +2631,14 @@ export default function App() {
 
       // Copy: Ctrl+C (in crop mode: copy canvas region or image slice, in select mode: copy elements)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
-        if (currentTool === 'crop' && activeCanvasCropBoxRef.current && activeCanvasCropBoxRef.current.w >= 5) {
+        // Crop box / picture crop: CanvasArea's own keydown listener runs the
+        // copy (with flash feedback). Running it here too would start a second
+        // concurrent clipboard write — just keep the element copy below from firing.
+        if (
+          (currentTool === 'crop' && activeCanvasCropBoxRef.current && activeCanvasCropBoxRef.current.w >= 5) ||
+          croppingImageId
+        ) {
           e.preventDefault();
-          handleCopyCanvasRegion(activeCanvasCropBoxRef.current);
-          return;
-        }
-        if (croppingImageId) {
-          e.preventDefault();
-          const imgElem = elements.find((el) => el.id === croppingImageId && el.type === 'image') as ImageElement;
-          if (imgElem && activeImgCropBoxRef.current) {
-            handleCopyImagePart(imgElem, activeImgCropBoxRef.current);
-          }
           return;
         }
         if (selectedElementIds.length > 0) {
@@ -2683,17 +2650,14 @@ export default function App() {
 
       // Cut: Ctrl+X (in crop mode: cut canvas region or image slice, in select mode: cut elements)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
-        if (currentTool === 'crop' && activeCanvasCropBoxRef.current && activeCanvasCropBoxRef.current.w >= 5) {
+        // Crop box / picture crop: CanvasArea's own keydown listener runs the
+        // cut (with flash feedback). Running it here too would start a second
+        // concurrent clipboard write — just keep the element cut below from firing.
+        if (
+          (currentTool === 'crop' && activeCanvasCropBoxRef.current && activeCanvasCropBoxRef.current.w >= 5) ||
+          croppingImageId
+        ) {
           e.preventDefault();
-          handleCutCanvasRegion(activeCanvasCropBoxRef.current);
-          return;
-        }
-        if (croppingImageId) {
-          e.preventDefault();
-          const imgElem = elements.find((el) => el.id === croppingImageId && el.type === 'image') as ImageElement;
-          if (imgElem && activeImgCropBoxRef.current) {
-            handleCutImagePart(imgElem, activeImgCropBoxRef.current);
-          }
           return;
         }
         if (selectedElementIds.length > 0) {
@@ -2937,7 +2901,6 @@ export default function App() {
             onCropCanvas={handleCropCanvas}
             onCutCanvasRegion={handleCutCanvasRegion}
             onCopyCanvasRegion={handleCopyCanvasRegion}
-            onTriggerPaste={handlePasteAction}
             onMouseMoveCanvas={(pt) => {
               lastMouseCanvasPosRef.current = pt;
             }}

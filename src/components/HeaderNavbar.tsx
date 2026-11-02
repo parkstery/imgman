@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { CanvasConfig } from '../types';
 import { clampManualZoom } from '../utils/viewportFit';
+import { GRID_MAJOR_EVERY, GRID_SIZE_MAX, GRID_SIZE_MIN, clampGridSize } from '../utils/gridSettings';
+import { NumberField } from './NumberField';
 
 interface HeaderNavbarProps {
   canUndo: boolean;
@@ -244,6 +246,21 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
           >
             <Grid className="w-4 h-4" />
           </button>
+          <label
+            className="flex items-center gap-0.5 text-[10px] text-stone-500"
+            title={`격자 크기(px) — ${GRID_SIZE_MIN}~${GRID_SIZE_MAX}, ${GRID_MAJOR_EVERY}칸마다 점 표시`}
+          >
+            <NumberField
+              id="input-grid-size"
+              value={config.gridSize}
+              min={GRID_SIZE_MIN}
+              max={GRID_SIZE_MAX}
+              step={1}
+              onChange={(v) => onUpdateConfig({ gridSize: clampGridSize(v) })}
+              className="w-11 bg-stone-800 border border-stone-700 rounded px-1 py-0.5 text-stone-200 font-mono text-[11px] focus:border-amber-500 outline-none"
+            />
+            px
+          </label>
           <button
             id="btn-toggle-snap"
             onClick={() => onUpdateConfig({ snapToGrid: !config.snapToGrid })}

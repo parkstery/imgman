@@ -47,6 +47,8 @@ import { Crop, Scissors, Copy, Wand2, Minus, Plus } from 'lucide-react';
 import { canEditElement, canEditLayer } from '../utils/lockGuards';
 import { clampManualZoom, computeViewportFit, shouldApplyFitNonce } from '../utils/viewportFit';
 import { shouldBlockDocumentShortcut } from '../utils/documentShortcuts';
+import { type LineStylePreset, resolveNewShapeStroke } from '../utils/stylePrefs';
+import { GRID_MAJOR_EVERY, clampGridSize, isDarkCanvasBackground } from '../utils/gridSettings';
 
 /** Default text tool: compact 12px label box */
 const DEFAULT_TEXT_FONT_SIZE = 12;
@@ -96,6 +98,9 @@ interface CanvasAreaProps {
   fitNonce?: number;
   documentInputEnabled?: boolean;
   lastShapeStyle: ShapeStylePreset;
+  /** Last chosen line / arrow style (separate from shape fill + outline). */
+  lastLineStyle: LineStylePreset;
+  onLineStyleDefaultsChange?: (patch: Partial<LineStylePreset>) => void;
   croppingImageId?: string | null;
   onStartCropImage?: (id: string) => void;
   onFinishCropImage?: () => void;
@@ -276,6 +281,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   fitNonce = 0,
   documentInputEnabled = true,
   lastShapeStyle,
+  lastLineStyle,
+  onLineStyleDefaultsChange,
   croppingImageId,
   onStartCropImage,
   onFinishCropImage,
@@ -318,14 +325,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   // Arrow properties panel state
   const [showArrowProperties, setShowArrowProperties] = useState(false);
   
-  // Arrow defaults for new arrows
-  const [arrowDefaults, setArrowDefaults] = useState({
-    beginArrow: { type: 'none' as ArrowType, size: 'medium' as ArrowSize },
-    endArrow: { type: 'triangle' as ArrowType, size: 'medium' as ArrowSize },
-    strokeWidth: 2,
-    strokeDash: 'solid' as 'solid' | 'dashed' | 'dotted',
-    lineCap: 'round' as 'flat' | 'round' | 'square',
-  });
+  // Arrow heads / cap / dash for new lines come from the remembered line style.
+  const arrowDefaults = lastLineStyle;
 
   // Continuous polyline (node-to-node) drawing draft — absolute canvas coords
   const [polylineDraft, setPolylineDraft] = useState<Point[] | null>(null);
@@ -377,13 +378,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     if (!draft || draft.length < 2 || !layer || layer.locked) return;
 
     const geom = finalizePolylineGeometry(draft);
-    const strokeW =
-      lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0
-        ? lastShapeStyle.strokeWidth
-        : strokeWidth || 2;
+    const strokeW = lastLineStyle.strokeWidth > 0 ? lastLineStyle.strokeWidth : strokeWidth || 2;
     const lineStroke =
-      lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none'
-        ? lastShapeStyle.stroke
+      lastLineStyle.stroke && lastLineStyle.stroke !== 'none'
+        ? lastLineStyle.stroke
         : primaryColor || '#000000';
 
     const newPoly: ShapeElement = {
@@ -397,12 +395,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       width: Math.max(geom.width, 1),
       height: Math.max(geom.height, 1),
       rotation: 0,
-      opacity: lastShapeStyle.opacity ?? 1,
+      opacity: lastLineStyle.opacity ?? 1,
       fill: 'none',
       stroke: lineStroke,
       strokeWidth: strokeW,
-      strokeDash: lastShapeStyle.strokeDash || 'solid',
-      shadow: lastShapeStyle.shadow,
+      strokeDash: lastLineStyle.strokeDash || 'solid',
+      shadow: lastLineStyle.shadow,
       points: geom.points,
     };
     onAddElement(newPoly);
@@ -410,7 +408,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   }, [
     layers,
     activeLayerId,
-    lastShapeStyle,
+    lastLineStyle,
     strokeWidth,
     primaryColor,
     onAddElement,
@@ -451,13 +449,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       computed.large,
       computed.sweep
     );
-    const strokeW =
-      lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0
-        ? lastShapeStyle.strokeWidth
-        : strokeWidth || 2;
+    const strokeW = lastLineStyle.strokeWidth > 0 ? lastLineStyle.strokeWidth : strokeWidth || 2;
     const lineStroke =
-      lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none'
-        ? lastShapeStyle.stroke
+      lastLineStyle.stroke && lastLineStyle.stroke !== 'none'
+        ? lastLineStyle.stroke
         : primaryColor || '#000000';
 
     const newArc: ShapeElement = {
@@ -471,12 +466,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       width: Math.max(geom.width, 1),
       height: Math.max(geom.height, 1),
       rotation: 0,
-      opacity: lastShapeStyle.opacity ?? 1,
+      opacity: lastLineStyle.opacity ?? 1,
       fill: 'none',
       stroke: lineStroke,
       strokeWidth: strokeW,
-      strokeDash: lastShapeStyle.strokeDash || 'solid',
-      shadow: lastShapeStyle.shadow,
+      strokeDash: lastLineStyle.strokeDash || 'solid',
+      shadow: lastLineStyle.shadow,
       points: geom.points,
       arcRadius: geom.arcRadius,
       arcLarge: geom.arcLarge,
@@ -487,7 +482,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   }, [
     layers,
     activeLayerId,
-    lastShapeStyle,
+    lastLineStyle,
     strokeWidth,
     primaryColor,
     onAddElement,
@@ -785,20 +780,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     onUpdateElement({ ...selectedElement, ...updates }, { skipHistory: false });
   }, [selectedElement, onUpdateElement]);
 
-  // Handle arrow defaults change
-  const handleArrowDefaultsChange = useCallback((props: {
-    beginArrow?: ArrowConfig;
-    endArrow?: ArrowConfig;
-    strokeWidth?: number;
-    strokeColor?: string;
-    strokeDash?: 'solid' | 'dashed' | 'dotted';
-    lineCap?: 'flat' | 'round' | 'square';
-  }) => {
-    setArrowDefaults(prev => ({
-      ...prev,
-      ...props,
-    }));
-  }, []);
+  // Handle arrow defaults change ("기본값으로 저장")
+  const handleArrowDefaultsChange = useCallback(
+    (props: Partial<LineStylePreset>) => {
+      onLineStyleDefaultsChange?.(props);
+    },
+    [onLineStyleDefaultsChange]
+  );
 
   const activeLayer = useMemo(
     () => layers.find((l) => l.id === activeLayerId) || layers[0],
@@ -869,7 +857,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   const snapValue = useCallback(
     (val: number): number => {
       if (!config.snapToGrid) return val;
-      const size = config.gridSize;
+      const size = clampGridSize(config.gridSize);
       return Math.round(val / size) * size;
     },
     [config.snapToGrid, config.gridSize]
@@ -1961,9 +1949,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
       const finalLength = length;
       const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
-      const strokeW = (lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0) ? lastShapeStyle.strokeWidth : (arrowDefaults.strokeWidth || strokeWidth || 2);
+      const strokeW = lastLineStyle.strokeWidth > 0 ? lastLineStyle.strokeWidth : strokeWidth || 2;
       const thickness = Math.max(strokeW * 4, 16);
-      const lineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
+      const lineStroke =
+        lastLineStyle.stroke && lastLineStyle.stroke !== 'none' ? lastLineStyle.stroke : primaryColor || '#000000';
 
       // Map shapeType to PowerPoint-style arrow configuration.
       // Presets declare both ends explicitly, so a straight line can never
@@ -1992,13 +1981,13 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         width: Math.max(5, Math.round(finalLength)),
         height: thickness,
         rotation: Math.round(deg),
-        opacity: lastShapeStyle.opacity ?? 1,
+        opacity: lastLineStyle.opacity ?? 1,
         fill: 'none',
         stroke: lineStroke,
         strokeWidth: strokeW,
-        strokeDash: lastShapeStyle.strokeDash || arrowDefaults.strokeDash || 'solid',
-        shadow: lastShapeStyle.shadow,
-        lineCap: arrowDefaults.lineCap || 'round',
+        strokeDash: lastLineStyle.strokeDash || 'solid',
+        shadow: lastLineStyle.shadow,
+        lineCap: lastLineStyle.lineCap || 'round',
         beginArrow,
         endArrow,
         // Store actual endpoints in points for PowerPoint-style behavior
@@ -2010,18 +1999,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
       onAddElement(newLineShape);
       onSelectElement(newLineShape.id);
-      // Remember the style of the freshly drawn arrow (PowerPoint behaviour):
-      // the next single-click arrow reuses these heads.
-      if (selectedShapeType.startsWith('line-arrow')) {
-        setArrowDefaults((prev) => ({
-          ...prev,
-          beginArrow,
-          endArrow,
-          strokeWidth: strokeW,
-          strokeDash: newLineShape.strokeDash,
-          lineCap: newLineShape.lineCap || prev.lineCap,
-        }));
-      }
+      // App remembers the drawn arrow's heads (next plain arrow reuses them).
       // NOTE: Do NOT automatically switch to 'select' mode! Allow continuous drawing.
       updateLinePreviewEnd(null);
       setIsDrawing(false);
@@ -2055,11 +2033,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               ? lastShapeStyle.fill || 'none'
               : 'none',
           gradient: lastShapeStyle.gradient?.enabled ? lastShapeStyle.gradient : undefined,
-          stroke:
-            lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none'
-              ? lastShapeStyle.stroke
-              : primaryColor || '#FF0000',
-          strokeWidth: lastShapeStyle.strokeWidth ?? (strokeWidth > 0 ? strokeWidth : 2),
+          // Outline "none" is remembered too (unless the shape would be invisible)
+          stroke: resolveNewShapeStroke(lastShapeStyle, primaryColor || '#FF0000'),
+          strokeWidth: lastShapeStyle.strokeWidth > 0 ? lastShapeStyle.strokeWidth : strokeWidth > 0 ? strokeWidth : 2,
           strokeDash: lastShapeStyle.strokeDash || 'solid',
           cornerRadius: lastShapeStyle.cornerRadius ?? 16,
           shadow: lastShapeStyle.shadow,
@@ -2613,26 +2589,35 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         />
 
         {/* Grid lines overlay */}
-        {config.showGrid && (
-          <svg className="absolute inset-0 w-full h-full pointer-events-none">
-            <defs>
-              <pattern
-                id="grid-pattern"
-                width={config.gridSize}
-                height={config.gridSize}
-                patternUnits="userSpaceOnUse"
-              >
-                <path
-                  d={`M ${config.gridSize} 0 L 0 0 0 ${config.gridSize}`}
-                  fill="none"
-                  stroke="#A8A29E"
-                  strokeWidth="1"
-                />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#grid-pattern)" opacity="0.85" />
-          </svg>
-        )}
+        {config.showGrid && (() => {
+          const g = clampGridSize(config.gridSize);
+          const major = g * GRID_MAJOR_EVERY;
+          // Constant on-screen dot size regardless of zoom, but never bigger than the cell.
+          const dotR = Math.min(2 / Math.max(zoom, 0.01), g * 0.35);
+          const dotFill = isDarkCanvasBackground(config.backgroundColor) ? '#E7E5E4' : '#44403C';
+          return (
+            <svg className="absolute inset-0 w-full h-full pointer-events-none">
+              <defs>
+                <pattern id="grid-pattern" width={g} height={g} patternUnits="userSpaceOnUse">
+                  <path d={`M ${g} 0 L 0 0 0 ${g}`} fill="none" stroke="#A8A29E" strokeWidth="1" />
+                </pattern>
+                {/* Dot on every 5th intersection: quarter circles at each tile corner join into full dots */}
+                <pattern id="grid-major-dots" width={major} height={major} patternUnits="userSpaceOnUse">
+                  {[
+                    [0, 0],
+                    [major, 0],
+                    [0, major],
+                    [major, major],
+                  ].map(([cx, cy]) => (
+                    <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={dotR} fill={dotFill} />
+                  ))}
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#grid-pattern)" opacity="0.85" />
+              <rect width="100%" height="100%" fill="url(#grid-major-dots)" />
+            </svg>
+          );
+        })()}
 
         {/* SVG Drawing & Elements Stage */}
         <svg
@@ -3177,8 +3162,9 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             currentTool === 'shape' &&
             (selectedShapeType === 'line' || selectedShapeType.startsWith('line-arrow')) &&
             linePreviewEnd && (() => {
-            const activeLineStroke = (lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none') ? lastShapeStyle.stroke : (primaryColor || '#000000');
-            const activeStrokeW = (lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0) ? lastShapeStyle.strokeWidth : (strokeWidth || 2);
+            const activeLineStroke =
+              lastLineStyle.stroke && lastLineStyle.stroke !== 'none' ? lastLineStyle.stroke : primaryColor || '#000000';
+            const activeStrokeW = lastLineStyle.strokeWidth > 0 ? lastLineStyle.strokeWidth : strokeWidth || 2;
             
             // Resolve the same arrow configuration the finished line will use
             const previewArrows = resolveArrowConfig(selectedShapeType, arrowDefaults);
@@ -3206,7 +3192,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
               fill: 'none',
               stroke: activeLineStroke,
               strokeWidth: activeStrokeW,
-              strokeDash: lastShapeStyle.strokeDash || 'solid',
+              strokeDash: lastLineStyle.strokeDash || 'solid',
               opacity: 0.8,
               visible: true,
               locked: false,
@@ -3257,13 +3243,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           {/* Continuous Polyline Draft Preview */}
           {polylineDraft && polylineDraft.length > 0 && (() => {
             const stroke =
-              lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none'
-                ? lastShapeStyle.stroke
+              lastLineStyle.stroke && lastLineStyle.stroke !== 'none'
+                ? lastLineStyle.stroke
                 : primaryColor || '#000000';
-            const sw =
-              lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0
-                ? lastShapeStyle.strokeWidth
-                : strokeWidth || 2;
+            const sw = lastLineStyle.strokeWidth > 0 ? lastLineStyle.strokeWidth : strokeWidth || 2;
             const previewPts =
               polylineCursor && polylineDraft.length > 0
                 ? [...polylineDraft, polylineCursor]
@@ -3308,13 +3291,10 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           {/* Arc Draft Preview */}
           {arcDraft && (() => {
             const stroke =
-              lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none'
-                ? lastShapeStyle.stroke
+              lastLineStyle.stroke && lastLineStyle.stroke !== 'none'
+                ? lastLineStyle.stroke
                 : primaryColor || '#000000';
-            const sw =
-              lastShapeStyle.strokeWidth && lastShapeStyle.strokeWidth > 0
-                ? lastShapeStyle.strokeWidth
-                : strokeWidth || 2;
+            const sw = lastLineStyle.strokeWidth > 0 ? lastLineStyle.strokeWidth : strokeWidth || 2;
             const endPt = arcDraft.end || arcBend;
             const computed =
               arcDraft.end && arcBend
@@ -3402,16 +3382,12 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
             <g transform={`translate(${previewRect.x}, ${previewRect.y})`}>
               <path
                 d={getShapePath(selectedShapeType, previewRect.w, previewRect.h, undefined, strokeWidth)}
-                fill={
-                  lastShapeStyle.fill === 'none' || lastShapeStyle.fill
-                    ? lastShapeStyle.fill || 'none'
-                    : 'none'
-                }
-                stroke={
-                  lastShapeStyle.stroke && lastShapeStyle.stroke !== 'none'
-                    ? lastShapeStyle.stroke
-                    : primaryColor || '#FF0000'
-                }
+                fill={lastShapeStyle.gradient?.enabled ? lastShapeStyle.gradient.startColor : lastShapeStyle.fill || 'none'}
+                stroke={(() => {
+                  const st = resolveNewShapeStroke(lastShapeStyle, primaryColor || '#FF0000');
+                  // Keep an outline in the preview so the drag box stays visible.
+                  return st === 'none' ? '#A8A29E' : st;
+                })()}
                 strokeWidth={lastShapeStyle.strokeWidth || strokeWidth || 1}
                 opacity={0.8}
                 strokeDasharray="4 4"

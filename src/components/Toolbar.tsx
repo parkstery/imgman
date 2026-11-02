@@ -6,7 +6,6 @@ import {
   Paintbrush,
   Highlighter,
   Eraser,
-  Shapes,
   Type,
   Pipette,
   PaintBucket,
@@ -44,6 +43,9 @@ interface ToolbarProps {
   onSelectTool: (tool: ToolType) => void;
   selectedShapeType: ShapeType;
   onSelectShapeType: (shape: ShapeType) => void;
+  /** Last shape picked from the shape gallery — what a single click draws. */
+  galleryShapeType: ShapeType;
+  onGalleryShapeChange: (shape: ShapeType) => void;
   primaryColor: string;
   /** transient = live drag preview from the color picker (no history entry) */
   onPrimaryColorChange: (color: string, transient?: boolean) => void;
@@ -91,6 +93,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onSelectTool,
   selectedShapeType,
   onSelectShapeType,
+  galleryShapeType,
+  onGalleryShapeChange,
   primaryColor,
   onPrimaryColorChange,
   strokeWidth,
@@ -149,7 +153,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     }
   }, [currentTool]);
 
-  const currentShape = SHAPE_ITEMS.find((s) => s.type === selectedShapeType) || SHAPE_ITEMS[0];
+  const galleryShape = SHAPE_ITEMS.find((s) => s.type === galleryShapeType) || SHAPE_ITEMS[1];
+  const isGalleryActive = currentTool === 'shape' && selectedShapeType === galleryShape.type;
+
+  // Single click: draw with the remembered gallery shape (closes the menu if open).
+  const handleShapeGalleryClick = () => {
+    onSelectShapeType(galleryShape.type);
+    onSelectTool('shape');
+    setShowShapeMenu(false);
+  };
+
+  // Double click (or the chevron): open the shape dropdown.
+  const handleShapeGalleryDoubleClick = () => {
+    onSelectShapeType(galleryShape.type);
+    onSelectTool('shape');
+    setShowShapeMenu(true);
+  };
   const displayColor = primaryColor.startsWith('#')
     ? primaryColor.toUpperCase()
     : primaryColor;
@@ -404,62 +423,55 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <div className="relative" ref={shapeMenuRef}>
           <button
             id="tool-shape"
-            onClick={() => {
-              onSelectTool('shape');
-              setShowShapeMenu(!showShapeMenu);
-            }}
+            onClick={handleShapeGalleryClick}
+            onDoubleClick={handleShapeGalleryDoubleClick}
             className={`flex items-center gap-0.5 p-2 rounded-md transition-colors ${
-              currentTool === 'shape' &&
-              selectedShapeType !== 'line' &&
-              selectedShapeType !== 'line-arrow' &&
-              selectedShapeType !== 'line-arrow-both' &&
-              selectedShapeType !== 'line-arrow-start' &&
-              selectedShapeType !== 'line-arrow-open' &&
-              selectedShapeType !== 'line-arrow-dot' &&
-              selectedShapeType !== 'line-arrow-diamond'
+              isGalleryActive
                 ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
                 : 'text-stone-300 hover:text-white hover:bg-stone-800'
             }`}
-            title={
-              selectedShapeType !== 'line' &&
-              selectedShapeType !== 'line-arrow' &&
-              selectedShapeType !== 'line-arrow-both' &&
-              selectedShapeType !== 'line-arrow-start' &&
-              selectedShapeType !== 'line-arrow-open' &&
-              selectedShapeType !== 'line-arrow-dot' &&
-              selectedShapeType !== 'line-arrow-diamond'
-                ? `${currentShape.label} (U)`
-                : '기타 도형 모음 (U)'
-            }
-            aria-label="기타 도형 모음"
+            title={`도형 모음: ${galleryShape.label} (U) — 클릭: 그리기, 더블클릭: 도형 선택`}
+            aria-label="도형 모음"
+            aria-haspopup="menu"
+            aria-expanded={showShapeMenu}
           >
-            {selectedShapeType !== 'line' &&
-            selectedShapeType !== 'line-arrow' ? (
-              <span className="flex items-center justify-center w-5 h-5 [&>svg]:w-5 [&>svg]:h-5">
-                {currentShape.icon}
-              </span>
-            ) : (
-              <Shapes className="w-5 h-5" />
-            )}
-            <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+            <span className="flex items-center justify-center w-5 h-5 [&>svg]:w-5 [&>svg]:h-5">
+              {galleryShape.icon}
+            </span>
+            <span
+              id="tool-shape-menu-toggle"
+              role="presentation"
+              onClick={(e) => {
+                // Chevron opens/closes the dropdown directly (one click).
+                e.stopPropagation();
+                onSelectShapeType(galleryShape.type);
+                onSelectTool('shape');
+                setShowShapeMenu((open) => !open);
+              }}
+              onDoubleClick={(e) => e.stopPropagation()}
+              className="flex items-center rounded hover:bg-black/20"
+            >
+              <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+            </span>
           </button>
 
           {showShapeMenu && (
             <div className="absolute left-0 top-full mt-1.5 w-60 bg-stone-900 border border-stone-700 rounded-lg shadow-2xl p-2 z-50 grid grid-cols-2 gap-1 max-h-80 overflow-y-auto">
               <div className="col-span-2 text-[11px] font-semibold text-stone-400 px-2 py-1">
-                MS 파워포인트 도형 모음 (13종)
+                MS 파워포인트 도형 모음 ({SHAPE_ITEMS.length}종) · 고른 도형을 기억합니다
               </div>
               {SHAPE_ITEMS.map((item) => (
                 <button
                   key={item.type}
                   id={`shape-option-${item.type}`}
                   onClick={() => {
+                    onGalleryShapeChange(item.type);
                     onSelectShapeType(item.type);
                     onSelectTool('shape');
                     setShowShapeMenu(false);
                   }}
                   className={`flex items-center space-x-2 px-2 py-2 rounded text-xs text-left transition-colors ${
-                    selectedShapeType === item.type && currentTool === 'shape'
+                    galleryShapeType === item.type
                       ? 'bg-amber-500/20 text-amber-400 font-medium'
                       : 'text-stone-300 hover:bg-stone-800 hover:text-white'
                   }`}

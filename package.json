@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit",
     "verify:svg": "tsx scripts/verify-svg-export.ts",
     "verify:pen": "tsx scripts/verify-pen-lasso-history.ts",
-    "verify:color": "tsx scripts/verify-color-picker.ts"
+    "verify:color": "tsx scripts/verify-color-picker.ts",
+    "verify:style": "node scripts/run-node-esm.mjs scripts/verify-style-prefs.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

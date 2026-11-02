@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import { RadialArrayIcon } from './RadialArrayIcon';
 import { NumberField } from './NumberField';
+import { GRID_MAJOR_EVERY, GRID_SIZE_MAX, GRID_SIZE_MIN, clampGridSize } from '../utils/gridSettings';
 
 /** Visual property section card with clear title bar */
 const PropertyGroup: React.FC<{
@@ -398,17 +399,30 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
         <div className="space-y-2 pt-2 border-t border-stone-800">
           <div className="flex justify-between items-center">
             <label className="text-stone-300 font-medium">격자 크기</label>
-            <span className="font-mono text-stone-400">{config.gridSize}px</span>
+            <span className="flex items-center gap-1 text-stone-500">
+              <NumberField
+                id="panel-grid-size"
+                value={config.gridSize}
+                min={GRID_SIZE_MIN}
+                max={GRID_SIZE_MAX}
+                onChange={(v) => onUpdateConfig({ gridSize: clampGridSize(v) })}
+                className="w-14 bg-stone-800 border border-stone-700 rounded px-1.5 py-0.5 text-stone-100 font-mono text-xs focus:border-amber-500"
+              />
+              px
+            </span>
           </div>
           <input
             type="range"
-            min="10"
-            max="100"
-            step="5"
-            value={config.gridSize}
-            onChange={(e) => onUpdateConfig({ gridSize: parseInt(e.target.value) })}
+            min={GRID_SIZE_MIN}
+            max={100}
+            step={1}
+            value={Math.min(100, config.gridSize)}
+            onChange={(e) => onUpdateConfig({ gridSize: clampGridSize(parseInt(e.target.value, 10)) })}
             className="w-full accent-amber-500 cursor-pointer"
           />
+          <p className="text-[10px] text-stone-500">
+            {GRID_MAJOR_EVERY}칸마다 작은 점으로 표시합니다. (최대 {GRID_SIZE_MAX}px까지 직접 입력)
+          </p>
         </div>
       </aside>
     );

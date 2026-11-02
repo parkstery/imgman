@@ -55,6 +55,17 @@ import {
 } from './utils/lockGuards';
 import { cloneElements, remapRadialInstanceGroups } from './utils/cloneElements';
 import { convertShapeToPath } from './utils/pathNodes';
+import { loadGalleryShape, saveGalleryShape } from './utils/toolPrefs';
+import {
+  type LineStylePreset,
+  DEFAULT_LINE_STYLE,
+  DEFAULT_SHAPE_STYLE,
+  applyToolbarColorToShape,
+  isLineShapeType,
+  recordDrawnArrowHeads,
+  recordLineStyleChange,
+  recordShapeStyleChange,
+} from './utils/stylePrefs';
 import {
   type ImageFingerprint,
   ClipboardSourceError,
@@ -146,19 +157,20 @@ export default function App() {
   const [pathEditId, setPathEditId] = useState<string | null>(null);
   const selectedElementId = selectedElementIds[selectedElementIds.length - 1] || null;
 
-  // Persistent shape styling (Feature 5: applied to subsequent shapes)
-  const [lastShapeStyle, setLastShapeStyle] = useState<ShapeStylePreset>({
-    fill: 'none',
-    stroke: '#FF0000',
-    strokeWidth: 2,
-    strokeDash: 'solid',
-    cornerRadius: 16,
-    opacity: 1,
-  });
+  // Last chosen styles for new drawings (see utils/stylePrefs):
+  // 채우기 + 윤곽선 for closed shapes, and a separate memory for 선 (lines/arrows).
+  const [lastShapeStyle, setLastShapeStyle] = useState<ShapeStylePreset>(DEFAULT_SHAPE_STYLE);
+  const [lastLineStyle, setLastLineStyle] = useState<LineStylePreset>(DEFAULT_LINE_STYLE);
 
   // Tool & styling state
   const [currentTool, setCurrentTool] = useState<ToolType>('select');
   const [selectedShapeType, setSelectedShapeType] = useState<ShapeType>('rounded-rect');
+  // Shape gallery (도형 모음) remembers the last shape picked from its dropdown.
+  const [galleryShapeType, setGalleryShapeType] = useState<ShapeType>(() => loadGalleryShape());
+  const handleGalleryShapeChange = useCallback((shape: ShapeType) => {
+    setGalleryShapeType(shape);
+    saveGalleryShape(shape);
+  }, []);
   const [primaryColor, setPrimaryColor] = useState<string>('#FF0000');
   const [strokeWidth, setStrokeWidth] = useState<number>(2);
   const [zoom, setZoom] = useState<number>(0.9);
@@ -769,19 +781,6 @@ export default function App() {
           if (target.strokeWidth) {
             setStrokeWidth(target.strokeWidth);
           }
-          setLastShapeStyle((prev) => ({
-            ...prev,
-            stroke: target.stroke !== 'none' ? target.stroke : prev.stroke,
-            strokeWidth: target.strokeWidth,
-            strokeDash: target.strokeDash,
-            opacity: target.opacity,
-            shadow: target.shadow,
-            gradient: target.gradient?.enabled
-              ? { ...target.gradient, enabled: false }
-              : prev.gradient
-                ? { ...prev.gradient, enabled: false }
-                : undefined,
-          }));
         } else {
           // Pen paths are drawn with the pen tool, not the shape tool
           if (target.shapeType !== 'path') setSelectedShapeType(target.shapeType);
@@ -799,18 +798,6 @@ export default function App() {
           if (target.strokeWidth) {
             setStrokeWidth(target.strokeWidth);
           }
-          setLastShapeStyle((prev) => ({
-            ...prev,
-            fill: fillColor || prev.fill,
-            stroke:
-              target.stroke && target.stroke !== 'none' ? target.stroke : fillColor || prev.stroke,
-            strokeWidth: target.strokeWidth,
-            strokeDash: target.strokeDash,
-            cornerRadius: target.cornerRadius ?? prev.cornerRadius,
-            opacity: target.opacity,
-            gradient: target.gradient,
-            shadow: target.shadow,
-          }));
         }
       } else if (target.type === 'brush') {
         setPrimaryColor(target.color);
@@ -819,23 +806,8 @@ export default function App() {
             ? Math.max(2, Math.round(target.strokeWidth / 3))
             : target.strokeWidth
         );
-        setLastShapeStyle((prev) => ({
-          ...prev,
-          fill: target.color,
-          stroke: target.color,
-          strokeWidth: target.isHighlighter
-            ? Math.max(2, Math.round(target.strokeWidth / 3))
-            : target.strokeWidth,
-          gradient: prev.gradient ? { ...prev.gradient, enabled: false } : undefined,
-        }));
       } else if (target.type === 'text') {
         setPrimaryColor(target.color);
-        setLastShapeStyle((prev) => ({
-          ...prev,
-          fill: target.color,
-          stroke: target.color,
-          gradient: prev.gradient ? { ...prev.gradient, enabled: false } : undefined,
-        }));
       }
     },
     [elements]
@@ -884,12 +856,10 @@ export default function App() {
       if (!canEditLayer(targetLayer)) return;
       const next = [...elements, newElem];
       setElements(next);
+      // New drawings are BUILT from the remembered styles, so adding one does not
+      // change the memory — except arrow heads (next plain arrow reuses them).
       if (newElem.type === 'shape') {
-        const isLineShape =
-          newElem.shapeType === 'line' ||
-          newElem.shapeType.startsWith('line-arrow') ||
-          newElem.shapeType === 'polyline' || newElem.shapeType === 'arc';
-        if (isLineShape) {
+        if (isLineShapeType(newElem.shapeType)) {
           setSelectedShapeType(newElem.shapeType);
           if (newElem.stroke && newElem.stroke !== 'none') {
             setPrimaryColor(newElem.stroke);
@@ -897,44 +867,15 @@ export default function App() {
           if (newElem.strokeWidth) {
             setStrokeWidth(newElem.strokeWidth);
           }
+          setLastLineStyle((prev) => recordDrawnArrowHeads(prev, newElem));
         } else if (newElem.fill && newElem.fill !== 'none') {
           setPrimaryColor(newElem.fill);
         }
-        setLastShapeStyle((prev) => ({
-          ...prev,
-          fill: isLineShape
-            ? prev.fill
-            : newElem.fill && newElem.fill !== 'none'
-              ? newElem.fill
-              : prev.fill,
-          stroke: newElem.stroke && newElem.stroke !== 'none' ? newElem.stroke : prev.stroke,
-          strokeWidth: newElem.strokeWidth,
-          strokeDash: newElem.strokeDash,
-          cornerRadius: newElem.cornerRadius ?? prev.cornerRadius,
-          opacity: newElem.opacity,
-          gradient: newElem.gradient?.enabled ? newElem.gradient : undefined,
-          shadow: newElem.shadow,
-        }));
       } else if (newElem.type === 'brush') {
         setPrimaryColor(newElem.color);
-        setLastShapeStyle((prev) => ({
-          ...prev,
-          fill: newElem.color,
-          stroke: newElem.color,
-          strokeWidth: newElem.isHighlighter
-            ? Math.max(2, Math.round(newElem.strokeWidth / 3))
-            : newElem.strokeWidth,
-          gradient: prev.gradient ? { ...prev.gradient, enabled: false } : undefined,
-        }));
       } else if (newElem.type === 'text') {
         setPrimaryColor(newElem.color);
         setSelectedElementIds([newElem.id]);
-        setLastShapeStyle((prev) => ({
-          ...prev,
-          fill: newElem.color,
-          stroke: newElem.color,
-          gradient: prev.gradient ? { ...prev.gradient, enabled: false } : undefined,
-        }));
       }
       pushHistory(next, layers, config);
     },
@@ -951,56 +892,33 @@ export default function App() {
       const next = elementsRef.current.map((el) => (el.id === updated.id ? updated : el));
       elementsRef.current = next;
       setElements(next);
-      // Feature 5: Keep style persistent for future shapes & lines
+      // Remember only the style properties the user actually changed
+      // (moving / resizing never rewrites the memory).
       if (updated.type === 'shape') {
-        const isLineShape = updated.shapeType === 'line' || updated.shapeType.startsWith('line-arrow') || updated.shapeType === 'polyline' || updated.shapeType === 'arc';
-        if (isLineShape) {
+        const before = existing?.type === 'shape' ? existing : null;
+        if (isLineShapeType(updated.shapeType)) {
           // Keep line shape type sticky for next drawings
           setSelectedShapeType(updated.shapeType);
-          if (updated.stroke && updated.stroke !== 'none') {
+          if (before) setLastLineStyle((prev) => recordLineStyleChange(prev, before, updated));
+          if (before && before.stroke !== updated.stroke && updated.stroke !== 'none') {
             setPrimaryColor(updated.stroke);
           }
-          if (updated.strokeWidth) {
+          if (before && before.strokeWidth !== updated.strokeWidth && updated.strokeWidth) {
             setStrokeWidth(updated.strokeWidth);
           }
-        } else if (updated.fill && updated.fill !== 'none') {
-          setPrimaryColor(updated.fill);
+        } else {
+          if (before) setLastShapeStyle((prev) => recordShapeStyleChange(prev, before, updated));
+          if (before && before.fill !== updated.fill && updated.fill !== 'none') {
+            setPrimaryColor(updated.fill);
+          }
         }
-
-        setLastShapeStyle((prev) => ({
-          ...prev,
-          fill: isLineShape
-            ? prev.fill
-            : updated.fill && updated.fill !== 'none'
-              ? updated.fill
-              : prev.fill,
-          stroke: updated.stroke && updated.stroke !== 'none' ? updated.stroke : prev.stroke,
-          strokeWidth: updated.strokeWidth,
-          strokeDash: updated.strokeDash,
-          cornerRadius: updated.cornerRadius ?? prev.cornerRadius,
-          opacity: updated.opacity,
-          gradient: updated.gradient?.enabled ? updated.gradient : undefined,
-          shadow: updated.shadow,
-        }));
-      } else if (updated.type === 'brush') {
+      } else if (
+        (updated.type === 'brush' || updated.type === 'text') &&
+        existing &&
+        existing.type === updated.type &&
+        existing.color !== updated.color
+      ) {
         setPrimaryColor(updated.color);
-        setLastShapeStyle((prev) => ({
-          ...prev,
-          fill: updated.color,
-          stroke: updated.color,
-          strokeWidth: updated.isHighlighter
-            ? Math.max(2, Math.round(updated.strokeWidth / 3))
-            : updated.strokeWidth,
-          gradient: prev.gradient ? { ...prev.gradient, enabled: false } : undefined,
-        }));
-      } else if (updated.type === 'text') {
-        setPrimaryColor(updated.color);
-        setLastShapeStyle((prev) => ({
-          ...prev,
-          fill: updated.color,
-          stroke: updated.color,
-          gradient: prev.gradient ? { ...prev.gradient, enabled: false } : undefined,
-        }));
       }
       if (!options?.skipHistory) {
         pushHistory(next, layers, config);
@@ -2370,15 +2288,9 @@ export default function App() {
   const handlePrimaryColorChange = useCallback(
     (color: string, transient = false) => {
       setPrimaryColor(color);
-      // Persist for subsequent shapes / lines / paint; clear sticky gradient so solid color wins
-      setLastShapeStyle((prev) => ({
-        ...prev,
-        fill: color,
-        stroke: color,
-        gradient: prev.gradient
-          ? { ...prev.gradient, enabled: false, startColor: color }
-          : undefined,
-      }));
+      // A toolbar color pick is a style choice for the next shapes and lines too.
+      setLastShapeStyle((prev) => applyToolbarColorToShape(prev, color));
+      setLastLineStyle((prev) => ({ ...prev, stroke: color }));
 
       // Immediately update selected element if any
       if (selectedElementIds.length > 0) {
@@ -2420,10 +2332,16 @@ export default function App() {
     [selectedElementIds, elements, layers, config, pushHistory]
   );
 
+  // "기본값으로 저장" from the arrow properties popover.
+  const handleLineStyleDefaultsChange = useCallback((patch: Partial<LineStylePreset>) => {
+    setLastLineStyle((prev) => ({ ...prev, ...patch }));
+  }, []);
+
   const handleStrokeWidthChange = useCallback(
     (w: number) => {
       setStrokeWidth(w);
       setLastShapeStyle((prev) => ({ ...prev, strokeWidth: w }));
+      setLastLineStyle((prev) => ({ ...prev, strokeWidth: w }));
 
       if (selectedElementIds.length > 0) {
         let hasChanges = false;
@@ -2710,6 +2628,8 @@ export default function App() {
             handleSelectTool('eraser');
             break;
           case 'u':
+            // Same as clicking the shape gallery: draw the remembered shape.
+            setSelectedShapeType(galleryShapeType);
             handleSelectTool('shape');
             break;
           case 't':
@@ -2800,6 +2720,7 @@ export default function App() {
     handleRadialConfirm,
     handleRadialCancel,
     isAnyModalOpen,
+    galleryShapeType,
   ]);
 
   const selectedElement = elements.find((el) => el.id === selectedElementId) || null;
@@ -2848,6 +2769,8 @@ export default function App() {
         onSelectTool={handleSelectTool}
         selectedShapeType={selectedShapeType}
         onSelectShapeType={setSelectedShapeType}
+        galleryShapeType={galleryShapeType}
+        onGalleryShapeChange={handleGalleryShapeChange}
         primaryColor={primaryColor}
         onPrimaryColorChange={handlePrimaryColorChange}
         strokeWidth={strokeWidth}
@@ -2932,6 +2855,8 @@ export default function App() {
             fitNonce={fitNonce}
             documentInputEnabled={!isAnyModalOpen}
             lastShapeStyle={lastShapeStyle}
+            lastLineStyle={lastLineStyle}
+            onLineStyleDefaultsChange={handleLineStyleDefaultsChange}
             croppingImageId={croppingImageId}
             onStartCropImage={handleStartCropImage}
             onFinishCropImage={handleFinishCropImage}

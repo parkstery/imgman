@@ -58,9 +58,9 @@ import { convertShapeToPath } from './utils/pathNodes';
 import { loadGalleryShape, saveGalleryShape } from './utils/toolPrefs';
 import {
   type LineStylePreset,
-  DEFAULT_LINE_STYLE,
-  DEFAULT_SHAPE_STYLE,
   applyToolbarColorToShape,
+  loadStyleMemory,
+  saveStyleMemory,
   isLineShapeType,
   recordDrawnArrowHeads,
   recordLineStyleChange,
@@ -159,8 +159,14 @@ export default function App() {
 
   // Last chosen styles for new drawings (see utils/stylePrefs):
   // 채우기 + 윤곽선 for closed shapes, and a separate memory for 선 (lines/arrows).
-  const [lastShapeStyle, setLastShapeStyle] = useState<ShapeStylePreset>(DEFAULT_SHAPE_STYLE);
-  const [lastLineStyle, setLastLineStyle] = useState<LineStylePreset>(DEFAULT_LINE_STYLE);
+  // Both are restored from localStorage so they survive a reload.
+  const [initialStyleMemory] = useState(loadStyleMemory);
+  const [lastShapeStyle, setLastShapeStyle] = useState<ShapeStylePreset>(initialStyleMemory.shape);
+  const [lastLineStyle, setLastLineStyle] = useState<LineStylePreset>(initialStyleMemory.line);
+  useEffect(() => {
+    // The first run writes back the (validated) loaded values — harmless.
+    saveStyleMemory({ shape: lastShapeStyle, line: lastLineStyle });
+  }, [lastShapeStyle, lastLineStyle]);
 
   // Tool & styling state
   const [currentTool, setCurrentTool] = useState<ToolType>('select');

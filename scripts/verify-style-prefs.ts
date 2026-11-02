@@ -8,6 +8,8 @@ import {
   DEFAULT_LINE_STYLE,
   DEFAULT_SHAPE_STYLE,
   applyToolbarColorToShape,
+  parseStyleMemory,
+  serializeStyleMemory,
   recordDrawnArrowHeads,
   recordLineStyleChange,
   recordShapeStyleChange,
@@ -123,6 +125,46 @@ console.log('toolbar color + new shape outline');
     'no outline + no fill -> fallback (never invisible)',
     resolveNewShapeStroke({ ...DEFAULT_SHAPE_STYLE, fill: 'none', stroke: 'none' }, '#FF0000') === '#FF0000'
   );
+}
+
+console.log('persistence (새로고침 후 유지)');
+{
+  const shape = {
+    ...DEFAULT_SHAPE_STYLE,
+    fill: '#10B981',
+    stroke: 'none',
+    strokeWidth: 5,
+    strokeDash: 'dashed' as const,
+    gradient: { enabled: true, type: 'radial' as const, startColor: '#111111', endColor: '#222222', angle: 45 },
+    shadow: { enabled: true, color: '#000000', blur: 6, offsetX: 2, offsetY: 3 },
+  };
+  const lineMem = {
+    ...DEFAULT_LINE_STYLE,
+    stroke: '#3B82F6',
+    strokeDash: 'dotted' as const,
+    lineCap: 'square' as const,
+    endArrow: { type: 'diamond' as const, size: 'large' as const },
+  };
+  const back = parseStyleMemory(serializeStyleMemory({ shape, line: lineMem }));
+  check('shape round-trips', JSON.stringify(back.shape) === JSON.stringify(shape));
+  check('line round-trips', JSON.stringify(back.line) === JSON.stringify(lineMem));
+  const empty = parseStyleMemory(null);
+  check('nothing stored -> defaults', JSON.stringify(empty.shape) === JSON.stringify(DEFAULT_SHAPE_STYLE));
+  check('broken JSON -> defaults', JSON.stringify(parseStyleMemory('{oops').line) === JSON.stringify(DEFAULT_LINE_STYLE));
+  const bad = parseStyleMemory(
+    JSON.stringify({
+      shape: { fill: 42, stroke: '#00FF00', strokeWidth: -3, strokeDash: 'wavy', opacity: 7 },
+      line: { stroke: 'none', lineCap: 'butt', endArrow: { type: 'rocket', size: 'large' } },
+    })
+  );
+  check('invalid shape fields fall back, valid kept',
+    bad.shape.fill === DEFAULT_SHAPE_STYLE.fill && bad.shape.stroke === '#00FF00' &&
+    bad.shape.strokeWidth === DEFAULT_SHAPE_STYLE.strokeWidth && bad.shape.strokeDash === 'solid' &&
+    bad.shape.opacity === 1);
+  check('invalid line fields fall back, valid kept',
+    bad.line.stroke === DEFAULT_LINE_STYLE.stroke && bad.line.lineCap === 'round' &&
+    bad.line.endArrow.type === 'triangle' && bad.line.endArrow.size === 'large');
+  check('disabled gradient dropped', parseStyleMemory(JSON.stringify({ shape: { gradient: { enabled: false } } })).shape.gradient === undefined);
 }
 
 if (failures) {

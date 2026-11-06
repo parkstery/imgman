@@ -12,6 +12,7 @@
     "verify:svg": "tsx scripts/verify-svg-export.ts",
     "verify:pen": "tsx scripts/verify-pen-lasso-history.ts",
     "verify:color": "tsx scripts/verify-color-picker.ts",
+    "verify:bg": "node scripts/run-node-esm.mjs scripts/verify-background-removal.ts",
     "verify:style": "node scripts/run-node-esm.mjs scripts/verify-style-prefs.ts"
   },
   "dependencies": {

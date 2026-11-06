@@ -40,9 +40,13 @@ import {
   Scissors,
   Lock,
   LockOpen,
+  Check,
+  X,
+  Pipette,
 } from 'lucide-react';
 import { RadialArrayIcon } from './RadialArrayIcon';
 import { NumberField } from './NumberField';
+import type { BackgroundRemovalOptions } from '../utils/imageEdit';
 import { GRID_MAJOR_EVERY, GRID_SIZE_MAX, GRID_SIZE_MIN, clampGridSize } from '../utils/gridSettings';
 
 /** Visual property section card with clear title bar */
@@ -106,7 +110,15 @@ interface PropertiesPanelProps {
   onCancelCropImage?: () => void;
   onCutImagePart?: (imgElem: ImageElement, crop: { x: number; y: number; w: number; h: number }) => void;
   onCopyImagePart?: (imgElem: ImageElement, crop: { x: number; y: number; w: number; h: number }) => void;
-  onRemoveImageBackground?: (imgElem: ImageElement, tolerance: number) => void;
+  onPreviewImageBackground?: (imgElem: ImageElement, options: BackgroundRemovalOptions) => void;
+  onApplyImageBackground?: () => void;
+  onCancelImageBackground?: () => void;
+  backgroundRemovalPreview?: {
+    src: string;
+    removedPct: number;
+    seedColor: string;
+  } | null;
+  isBackgroundRemovalProcessing?: boolean;
   activeCropBox?: { x: number; y: number; w: number; h: number } | null;
   onFitCanvasToContent?: () => void;
   canFitCanvas?: boolean;
@@ -153,7 +165,11 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   onCancelCropImage,
   onCutImagePart,
   onCopyImagePart,
-  onRemoveImageBackground,
+  onPreviewImageBackground,
+  onApplyImageBackground,
+  onCancelImageBackground,
+  backgroundRemovalPreview = null,
+  isBackgroundRemovalProcessing = false,
   activeCropBox,
   onFitCanvasToContent,
   canFitCanvas = false,
@@ -176,8 +192,19 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   const [canvasHeightDraft, setCanvasHeightDraft] = useState(String(config.height));
   // Rotation manipulation mode: flip buttons become 1°/90° rotators
   const [rotateMode, setRotateMode] = useState(false);
-  // Background-removal color tolerance (0-100; flood fill threshold)
+  // Background-removal controls (screenshot / flat background workflow)
   const [bgTolerance, setBgTolerance] = useState<number>(30);
+  const [bgFeather, setBgFeather] = useState<number>(50);
+  const [bgUseCustomColor, setBgUseCustomColor] = useState(false);
+  const [bgColor, setBgColor] = useState('#FFFFFF');
+
+  // A custom color chosen for one image should not silently follow the next one.
+  useEffect(() => {
+    if (selectedElement?.type === 'image') {
+      setBgUseCustomColor(false);
+      setBgColor('#FFFFFF');
+    }
+  }, [selectedElement?.id, selectedElement?.type]);
 
   useEffect(() => {
     setCanvasWidthDraft(String(config.width));
@@ -461,6 +488,11 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
   const text = isText ? (selectedElement as TextElement) : null;
   const img = isImage ? (selectedElement as ImageElement) : null;
+
+  // Changing a control invalidates the old preview (it no longer matches).
+  const invalidateBackgroundPreview = () => {
+    if (backgroundRemovalPreview) onCancelImageBackground?.();
+  };
 
   return (
     <aside className="w-72 h-full min-h-0 bg-stone-900 border-l border-stone-800 text-stone-200 p-4 flex flex-col space-y-4 overflow-y-auto overscroll-contain text-xs shrink-0 select-none *:shrink-0">
@@ -1911,23 +1943,82 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               </button>
             </div>
 
-          {/* Background Removal */}
-          {onRemoveImageBackground && (
-            <div className="space-y-1.5 rounded border border-stone-800 p-2">
-              <div className="flex items-center justify-between">
+          {/* Background Removal — screenshot / flat-background workflow */}
+          {onPreviewImageBackground && (
+            <div className="space-y-2 rounded border border-stone-800 p-2">
+              <div className="flex items-start justify-between gap-2">
                 <label className="text-stone-300 font-medium text-[11px] flex items-center space-x-1">
                   <Eraser className="w-3.5 h-3.5 text-amber-400" />
                   <span>배경 제거</span>
                 </label>
+                <span className="text-[9px] text-stone-500 leading-tight text-right">
+                  스크린샷
+                  <br />
+                  단색 배경
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-1">
                 <button
-                  id="btn-remove-bg"
-                  onClick={() => onRemoveImageBackground(img, bgTolerance)}
-                  className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-semibold transition-colors"
-                  title="단색·균일한 배경을 투명하게 지웁니다"
+                  type="button"
+                  onClick={() => {
+                    setBgUseCustomColor(false);
+                    invalidateBackgroundPreview();
+                  }}
+                  className={`py-1 rounded border text-[10px] transition-colors ${
+                    !bgUseCustomColor
+                      ? 'border-amber-500 bg-amber-500/15 text-amber-300'
+                      : 'border-stone-800 text-stone-400 hover:text-stone-200'
+                  }`}
                 >
-                  적용
+                  자동 감지
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBgUseCustomColor(true);
+                    invalidateBackgroundPreview();
+                  }}
+                  className={`py-1 rounded border text-[10px] transition-colors ${
+                    bgUseCustomColor
+                      ? 'border-amber-500 bg-amber-500/15 text-amber-300'
+                      : 'border-stone-800 text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  색 직접 지정
                 </button>
               </div>
+
+              {bgUseCustomColor && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={bgColor}
+                    onChange={(e) => {
+                      setBgColor(e.target.value);
+                      invalidateBackgroundPreview();
+                    }}
+                    className="w-7 h-7 shrink-0 rounded border border-stone-700 bg-transparent cursor-pointer"
+                    title="배경색 직접 선택"
+                  />
+                  <span className="font-mono text-[10px] text-stone-300">
+                    {bgColor.toUpperCase()}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBgColor(backgroundRemovalPreview?.seedColor ?? '#FFFFFF');
+                      invalidateBackgroundPreview();
+                    }}
+                    className="ml-auto flex items-center gap-1 text-[10px] text-stone-400 hover:text-amber-300"
+                    title="가장자리에서 자동 감지한 색 사용"
+                  >
+                    <Pipette className="w-3 h-3" />
+                    자동값
+                  </button>
+                </div>
+              )}
+
               <div className="flex items-center space-x-2 text-[11px]">
                 <span className="text-[10px] text-stone-400 shrink-0">
                   허용치 <span className="text-amber-400 font-semibold">{bgTolerance}%</span>
@@ -1939,12 +2030,98 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   max="80"
                   step="1"
                   value={bgTolerance}
-                  onChange={(e) => setBgTolerance(Number(e.target.value))}
+                  onChange={(e) => {
+                    setBgTolerance(Number(e.target.value));
+                    invalidateBackgroundPreview();
+                  }}
                   className="flex-1 accent-amber-500 cursor-pointer"
                 />
               </div>
+
+              <div className="flex items-center space-x-2 text-[11px]">
+                <span className="text-[10px] text-stone-400 shrink-0">
+                  부드럽게 <span className="text-amber-400 font-semibold">{bgFeather}%</span>
+                </span>
+                <input
+                  id="bg-removal-feather"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={bgFeather}
+                  onChange={(e) => {
+                    setBgFeather(Number(e.target.value));
+                    invalidateBackgroundPreview();
+                  }}
+                  className="flex-1 accent-amber-500 cursor-pointer"
+                />
+              </div>
+
+              <button
+                id="btn-remove-bg"
+                type="button"
+                onClick={() =>
+                  onPreviewImageBackground(img, {
+                    tolerance: bgTolerance,
+                    feather: bgFeather,
+                    backgroundColor: bgUseCustomColor ? bgColor : null,
+                  })
+                }
+                disabled={isBackgroundRemovalProcessing || isElementLocked}
+                className="w-full py-1.5 rounded bg-amber-600 hover:bg-amber-500 disabled:bg-stone-700 disabled:text-stone-400 text-white text-[11px] font-semibold transition-colors"
+                title="결과를 미리 확인한 뒤 적용합니다"
+              >
+                {isBackgroundRemovalProcessing ? '미리보기 계산 중...' : '미리보기'}
+              </button>
+
+              {backgroundRemovalPreview && (
+                <div className="space-y-1.5 pt-1 border-t border-stone-800">
+                  <div className="rounded border border-stone-700 bg-[radial-gradient(#374151_1px,transparent_1px)] [background-size:10px_10px] bg-stone-900/60 p-1">
+                    <img
+                      src={backgroundRemovalPreview.src}
+                      alt="배경 제거 미리보기"
+                      className="mx-auto max-h-40 w-full object-contain"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-[10px]">
+                    <span className="text-amber-300">
+                      제거 예정 {backgroundRemovalPreview.removedPct}%
+                    </span>
+                    <span className="flex items-center gap-1 font-mono text-stone-400">
+                      <span
+                        className="w-2.5 h-2.5 rounded-sm border border-stone-600"
+                        style={{ backgroundColor: backgroundRemovalPreview.seedColor }}
+                      />
+                      {backgroundRemovalPreview.seedColor}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      id="btn-remove-bg-apply"
+                      type="button"
+                      onClick={() => onApplyImageBackground?.()}
+                      disabled={isElementLocked}
+                      className="py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:bg-stone-700 disabled:text-stone-400 text-white text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      적용
+                    </button>
+                    <button
+                      id="btn-remove-bg-cancel"
+                      type="button"
+                      onClick={() => onCancelImageBackground?.()}
+                      className="py-1.5 rounded bg-stone-800 hover:bg-stone-700 text-stone-300 text-[11px] flex items-center justify-center gap-1 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      취소
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <p className="text-[10px] text-stone-500 leading-snug">
-                가장자리에서 안쪽으로 배경색을 채워 지웁니다. 배경과 색이 비슷한 부분도 함께 지워질 수 있습니다.
+                이미지 가장자리에서 가장 많은 색을 배경으로 잡고, 테두리와 연결된 영역만 지웁니다.
+                색이 섞여 있으면 ‘색 직접 지정’을 사용하세요.
               </p>
             </div>
           )}

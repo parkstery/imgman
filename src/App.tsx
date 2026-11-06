@@ -39,6 +39,7 @@ import {
   getImageLocalIntersection,
   punchHoleInImageElement,
   removeImageBackground,
+  type BackgroundRemovalOptions,
 } from './utils/imageEdit';
 import { buildRadialPreview, normalizeAngle } from './utils/radialArray';
 import { useDocumentHistory } from './hooks/useDocumentHistory';
@@ -217,6 +218,27 @@ export default function App() {
     h: number;
   } | null>(null);
   const activeImgCropBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  // Background-removal preview: computed but not committed to the document yet.
+  const [bgRemovalPreview, setBgRemovalPreview] = useState<{
+    elementId: string;
+    src: string;
+    naturalWidth: number;
+    naturalHeight: number;
+    removedPct: number;
+    seedColor: string;
+  } | null>(null);
+  const [isBgRemovalProcessing, setIsBgRemovalProcessing] = useState(false);
+  const bgRemovalSeqRef = useRef(0);
+
+  // A preview belongs to one image only; drop it when the selection changes.
+  useEffect(() => {
+    if (!bgRemovalPreview) return;
+    if (bgRemovalPreview.elementId === selectedElementId) return;
+    bgRemovalSeqRef.current++;
+    setBgRemovalPreview(null);
+    setIsBgRemovalProcessing(false);
+  }, [selectedElementId, bgRemovalPreview]);
 
   // Canvas-wide Crop Box State (for Screen/Canvas Region Capture)
   const activeCanvasCropBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -1344,27 +1366,77 @@ export default function App() {
     showToast(`${selected.length}개 객체를 잘라냈습니다. (Ctrl+V로 붙여넣기)`);
   }, [elements, selectedElementIds, layers, handleDeleteSelectedElements, showToast]);
 
-  // Background removal: color-key from the border, clear matched pixels to transparent.
-  const handleRemoveImageBackground = useCallback(
-    async (imgElem: ImageElement, tolerance: number) => {
-      if (!canEditElement(imgElem, layers)) return;
+  // Background removal: compute a preview first, then commit it as one history step.
+  const handlePreviewImageBackground = useCallback(
+    async (imgElem: ImageElement, options: BackgroundRemovalOptions) => {
+      const current = elementsRef.current.find((el) => el.id === imgElem.id);
+      if (!current || current.type !== 'image' || !canEditElement(current, layers)) return;
+
+      const seq = ++bgRemovalSeqRef.current;
+      setIsBgRemovalProcessing(true);
       try {
-        showToast('배경을 제거하는 중...');
-        const { element: next, removedPct } = await removeImageBackground(imgElem, tolerance);
-        const nextElements = elementsRef.current.map((el) => (el.id === imgElem.id ? next : el));
-        elementsRef.current = nextElements;
-        setElements(nextElements);
-        pushHistory(nextElements, layers, config);
-        setSelectedElementIds([imgElem.id]);
-        showToast(`배경을 제거했습니다. (픽셀 ${removedPct}% 지움) 경계가 거칠면 허용치를 조정해 다시 적용하세요.`);
+        const { element, removedPct, seedColor } = await removeImageBackground(current, options);
+        if (seq !== bgRemovalSeqRef.current) return;
+        setBgRemovalPreview({
+          elementId: current.id,
+          src: element.src,
+          naturalWidth: element.naturalWidth,
+          naturalHeight: element.naturalHeight,
+          removedPct,
+          seedColor,
+        });
+        showToast(
+          removedPct > 0
+            ? `미리보기 생성 완료 · 배경 ${removedPct}% 제거 예정`
+            : '제거할 배경을 찾지 못했습니다.'
+        );
       } catch (err) {
-        console.error('Background removal failed:', err);
+        if (seq !== bgRemovalSeqRef.current) return;
+        setBgRemovalPreview(null);
+        console.error('Background removal preview failed:', err);
         const msg = err instanceof Error ? err.message : '알 수 없는 오류';
         showToast(`배경 제거 실패: ${msg}`);
+      } finally {
+        if (seq === bgRemovalSeqRef.current) setIsBgRemovalProcessing(false);
       }
     },
-    [elements, layers, config, pushHistory, showToast]
+    [layers, showToast]
   );
+
+  const handleApplyImageBackground = useCallback(() => {
+    const preview = bgRemovalPreview;
+    if (!preview) return;
+    const current = elementsRef.current.find((el) => el.id === preview.elementId);
+    if (!current || current.type !== 'image') {
+      setBgRemovalPreview(null);
+      return;
+    }
+    if (!canEditElement(current, layers)) return;
+
+    const nextElement: ImageElement = {
+      ...current,
+      src: preview.src,
+      naturalWidth: preview.naturalWidth,
+      naturalHeight: preview.naturalHeight,
+    };
+    const nextElements = elementsRef.current.map((el) =>
+      el.id === preview.elementId ? nextElement : el
+    );
+    elementsRef.current = nextElements;
+    setElements(nextElements);
+    pushHistory(nextElements, layers, config);
+    setSelectedElementIds([preview.elementId]);
+    setBgRemovalPreview(null);
+    showToast(
+      `배경을 제거했습니다. (픽셀 ${preview.removedPct}% 지움) 경계가 거칠면 허용치를 조정해 다시 미리보기 하세요.`
+    );
+  }, [bgRemovalPreview, layers, config, pushHistory, showToast]);
+
+  const handleCancelImageBackground = useCallback(() => {
+    bgRemovalSeqRef.current++;
+    setIsBgRemovalProcessing(false);
+    setBgRemovalPreview(null);
+  }, []);
 
   // Lasso (올가미) selection: copy / cut / new image / erase inside a free-form outline.
   // Resolves true when the outline should stay selected.
@@ -2920,7 +2992,15 @@ export default function App() {
           onCancelCropImage={handleFinishCropImage}
           onCutImagePart={handleCutImagePart}
           onCopyImagePart={handleCopyImagePart}
-          onRemoveImageBackground={handleRemoveImageBackground}
+          onPreviewImageBackground={handlePreviewImageBackground}
+          onApplyImageBackground={handleApplyImageBackground}
+          onCancelImageBackground={handleCancelImageBackground}
+          backgroundRemovalPreview={
+            selectedElement && bgRemovalPreview?.elementId === selectedElement.id
+              ? bgRemovalPreview
+              : null
+          }
+          isBackgroundRemovalProcessing={isBgRemovalProcessing}
           activeCropBox={activeImgCropBox}
           onFitCanvasToContent={handleFitCanvasToContent}
           canFitCanvas={canFitCanvas}

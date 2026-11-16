@@ -286,8 +286,9 @@ export function clearBackgroundColorInPlace(
   if (removedCount === 0) {
     return { removed: 0, aborted: 'no-match', seedColor: seed };
   }
-  // Safety: fill must not swallow (almost) the whole image — subject lost
-  if (removedCount >= total * 0.985) {
+  // Safety: fill must not swallow the whole image — subject lost.
+  // 99.9% leaves room for tiny UI elements in a large screenshot.
+  if (removedCount >= total * 0.999) {
     return { removed: removedCount, aborted: 'flood-everything', seedColor: seed };
   }
 

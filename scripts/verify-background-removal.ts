@@ -165,7 +165,20 @@ console.log('9) 피사체가 가장자리에 닿아도 지배색을 배경으로
   check('일반 배경 alpha 0', alphaAt(px, w, 5, 5) === 0);
 }
 
-console.log('10) 색상 파싱/직렬화');
+console.log('10) 큰 스크린샷 속 작은 아이콘도 보존');
+{
+  const w = 100;
+  const h = 100;
+  const px = makeImage(w, h, [255, 255, 255, 255], (x, y) =>
+    x >= 48 && x < 52 && y >= 48 && y < 52 ? [220, 30, 90, 255] : null
+  );
+  const r = clearBackgroundColorInPlace(px, w, h, 30);
+  check('abort 없음', r.aborted === null, r.aborted);
+  check('작은 아이콘 alpha 255', alphaAt(px, w, 49, 49) === 255);
+  check('배경 alpha 0', alphaAt(px, w, 0, 0) === 0);
+}
+
+console.log('11) 색상 파싱/직렬화');
 {
   check('#abc 확장', sameColor(parseHexColor('#abc'), { r: 170, g: 187, b: 204 }));
   check('#12AB34 파싱', sameColor(parseHexColor('#12AB34'), { r: 18, g: 171, b: 52 }));

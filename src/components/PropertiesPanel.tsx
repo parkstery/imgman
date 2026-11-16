@@ -1976,6 +1976,9 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 <button
                   type="button"
                   onClick={() => {
+                    if (backgroundRemovalPreview?.seedColor) {
+                      setBgColor(backgroundRemovalPreview.seedColor);
+                    }
                     setBgUseCustomColor(true);
                     invalidateBackgroundPreview();
                   }}
@@ -2100,7 +2103,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                       id="btn-remove-bg-apply"
                       type="button"
                       onClick={() => onApplyImageBackground?.()}
-                      disabled={isElementLocked}
+                      disabled={isElementLocked || isBackgroundRemovalProcessing}
                       className="py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:bg-stone-700 disabled:text-stone-400 text-white text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"
                     >
                       <Check className="w-3.5 h-3.5" />

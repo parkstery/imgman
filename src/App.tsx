@@ -67,6 +67,7 @@ import {
   recordLineStyleChange,
   recordShapeStyleChange,
 } from './utils/stylePrefs';
+import { propagateColorChange } from './utils/multiStyle';
 import {
   type ImageFingerprint,
   ClipboardSourceError,
@@ -222,6 +223,7 @@ export default function App() {
   // Background-removal preview: computed but not committed to the document yet.
   const [bgRemovalPreview, setBgRemovalPreview] = useState<{
     elementId: string;
+    sourceSrc: string;
     src: string;
     naturalWidth: number;
     naturalHeight: number;
@@ -231,14 +233,15 @@ export default function App() {
   const [isBgRemovalProcessing, setIsBgRemovalProcessing] = useState(false);
   const bgRemovalSeqRef = useRef(0);
 
-  // A preview belongs to one image only; drop it when the selection changes.
+  // A preview belongs to one image only; drop it (and any in-flight work)
+  // when the selection changes.
   useEffect(() => {
-    if (!bgRemovalPreview) return;
-    if (bgRemovalPreview.elementId === selectedElementId) return;
     bgRemovalSeqRef.current++;
-    setBgRemovalPreview(null);
     setIsBgRemovalProcessing(false);
-  }, [selectedElementId, bgRemovalPreview]);
+    setBgRemovalPreview((prev) =>
+      prev && prev.elementId === selectedElementId ? prev : null
+    );
+  }, [selectedElementId]);
 
   // Canvas-wide Crop Box State (for Screen/Canvas Region Capture)
   const activeCanvasCropBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -993,6 +996,30 @@ export default function App() {
     [layers, config, pushHistory]
   );
 
+  // Properties-panel edits: a color change also applies to the rest of a multi-selection
+  const handlePanelUpdateElement = useCallback(
+    (updated: CanvasElement) => {
+      const before = elementsRef.current.find((el) => el.id === updated.id);
+      if (selectedElementIds.length > 1 && before) {
+        const others = elementsRef.current.filter(
+          (el) =>
+            el.id !== updated.id &&
+            selectedElementIds.includes(el.id) &&
+            canEditElement(el, layers)
+        );
+        const changed = propagateColorChange(before, updated, others);
+        if (changed.length > 0) {
+          // One undo step: update the source without history, then commit both states.
+          handleUpdateElement(updated, { skipHistory: true });
+          handleUpdateElements(changed);
+          return;
+        }
+      }
+      handleUpdateElement(updated);
+    },
+    [selectedElementIds, layers, handleUpdateElement, handleUpdateElements]
+  );
+
   // Commit live edits (e.g. finished drag) as a single undo step
   const handleCommitHistory = useCallback(() => {
     pushHistory(elementsRef.current, layers, config);
@@ -1379,6 +1406,7 @@ export default function App() {
         if (seq !== bgRemovalSeqRef.current) return;
         setBgRemovalPreview({
           elementId: current.id,
+          sourceSrc: current.src,
           src: element.src,
           naturalWidth: element.naturalWidth,
           naturalHeight: element.naturalHeight,
@@ -1412,6 +1440,11 @@ export default function App() {
       return;
     }
     if (!canEditElement(current, layers)) return;
+    if (current.src !== preview.sourceSrc) {
+      setBgRemovalPreview(null);
+      showToast('이미지가 그 사이에 변경되어 미리보기를 취소했습니다. 다시 미리보기 하세요.');
+      return;
+    }
 
     const nextElement: ImageElement = {
       ...current,
@@ -2959,7 +2992,7 @@ export default function App() {
       {/* Right: Properties panel spans the full window height */}
       <PropertiesPanel
           selectedElement={selectedElement}
-          onUpdateElement={handleUpdateElement}
+          onUpdateElement={handlePanelUpdateElement}
           onDuplicateElement={handleDuplicateElement}
           onCreateMirrorAxis={handleCreateMirrorElement}
           onDeleteElement={handleDeleteElement}

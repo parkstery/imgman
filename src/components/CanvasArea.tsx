@@ -21,6 +21,7 @@ import { getRotationOriginAttr } from '../utils/elementGeometry';
 import { getPathNodesD, isOpenPath, finalizePathGeometry, scalePathNodes } from '../utils/pathNodes';
 import { usePenTool } from '../hooks/usePenTool';
 import { useLassoTool } from '../hooks/useLassoTool';
+import { useTouchMouseBridge, type TouchPinchGesture } from '../hooks/useTouchMouseBridge';
 import type { LassoAction } from '../utils/lassoSelection';
 import { PenDraftOverlay, LassoOverlay, LassoActionBar, PathNodeEditor, PathEditHint } from './PathTools';
 import { brushPath } from '../utils/svgExport';
@@ -852,6 +853,46 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
     },
     [pan, zoom]
   );
+
+  // Keep the latest zoom/pan available to the native touch listeners without
+  // re-attaching them on every pinch move.
+  const zoomRef = useRef(zoom);
+  const panRef = useRef(pan);
+  zoomRef.current = zoom;
+  panRef.current = pan;
+
+  // Pinch: zoom about the midpoint and pan with its movement. The canvas point
+  // under the midpoint stays fixed, then the two-finger drag is added on top.
+  const handlePinch = useCallback(
+    ({ scale, dx, dy, centerX, centerY }: TouchPinchGesture) => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      const currentZoom = zoomRef.current;
+      const currentPan = panRef.current;
+      if (!Number.isFinite(currentZoom) || currentZoom <= 0) return;
+      const nextZoom = clampManualZoom(currentZoom * scale, currentZoom);
+      if (!Number.isFinite(nextZoom) || nextZoom <= 0) return;
+
+      const localX = centerX - rect.left;
+      const localY = centerY - rect.top;
+      const canvasX = (localX - currentPan.x) / currentZoom;
+      const canvasY = (localY - currentPan.y) / currentZoom;
+      const nextPan = {
+        x: localX - canvasX * nextZoom + dx,
+        y: localY - canvasY * nextZoom + dy,
+      };
+
+      zoomRef.current = nextZoom;
+      panRef.current = nextPan;
+      onZoomChange(nextZoom, 'user');
+      setPan(nextPan);
+    },
+    [onZoomChange]
+  );
+
+  useTouchMouseBridge(containerRef, { onPinch: handlePinch });
 
   // Snap to grid helper
   const snapValue = useCallback(
@@ -2465,6 +2506,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   }, [currentTool, isPanning]);
 
   return (
+    <div className="flex-1 min-w-0 min-h-0 flex flex-col">
     <div
       ref={containerRef}
       tabIndex={0}
@@ -2497,8 +2539,8 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           }
         }
       }}
-      style={{ cursor: currentCursor }}
-      className="flex-1 relative overflow-hidden bg-stone-950 select-none outline-none focus:ring-0"
+      style={{ cursor: currentCursor, touchAction: 'none' }}
+      className="flex-1 min-h-0 relative overflow-hidden bg-stone-950 select-none outline-none focus:ring-0"
     >
       {/* Horizontal Top Ruler */}
       {config.showRulers && (
@@ -3736,15 +3778,144 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                 className="absolute top-1/2 -right-1.5 -translate-y-1/2 w-1.5 h-6 bg-black border border-white pointer-events-auto cursor-ew-resize shadow"
               />
             </div>
+          </div>
+        )}
 
-            {/* Floating Crop Control Toolbar */}
+        {/* Crop Box Overlay */}
+        {cropBox && (
+          <div
+            style={{
+              left: `${cropBox.x}px`,
+              top: `${cropBox.y}px`,
+              width: `${cropBox.w}px`,
+              height: `${cropBox.h}px`,
+            }}
+            className={`absolute border-2 border-dashed border-amber-400 pointer-events-none z-30 transition-all duration-150 ${
+              isCropFlashing
+                ? 'bg-white/80 ring-4 ring-amber-400 shadow-2xl'
+                : 'bg-amber-500/15'
+            }`}
+          >
+            {/* Corner resize indicators */}
+            <div className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-amber-400 rounded-sm border border-stone-900 shadow-sm" />
+            <div className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-amber-400 rounded-sm border border-stone-900 shadow-sm" />
+            <div className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-amber-400 rounded-sm border border-stone-900 shadow-sm" />
+            <div className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-amber-400 rounded-sm border border-stone-900 shadow-sm" />
+          </div>
+        )}
+      </div>
+
+      {currentTool === 'lasso' && (
+        <LassoActionBar
+          hasSelection={!!lasso.selection}
+          drawingPolygon={lasso.mode === 'polygon'}
+          busy={lasso.busy}
+          onAction={(action) => void lasso.runAction(action)}
+          onClear={lasso.clear}
+        />
+      )}
+
+      {pathEditElement && pathEditEditable && <PathEditHint onDone={() => onSetPathEditId?.(null)} />}
+
+      {/* Radial Array – step guide banner */}
+      {currentTool === 'radial' && radialToolState && radialToolState.step !== 'idle' && (
+        <div className="absolute top-9 left-1/2 -translate-x-1/2 z-20 bg-stone-900/95 backdrop-blur border border-amber-500/50 rounded-lg px-3.5 py-2 text-[11px] text-stone-200 flex items-center gap-3 shadow-xl pointer-events-none">
+          <span className="font-semibold text-amber-300">방사상 배열</span>
+          <span className="text-stone-400">
+            {radialToolState.step === 'placing_center'
+              ? '① 캔버스를 클릭해 중심점 지정'
+              : radialToolState.step === 'adjusting_radius'
+              ? '② 마우스를 움직여 반지름 조절'
+              : '③ 반지름 고정됨'}
+          </span>
+          <span className="text-stone-600">|</span>
+          <span className="text-stone-400">
+            <kbd className="px-1 py-0.5 rounded bg-stone-800 border border-stone-700 text-amber-300 font-mono text-[10px] font-bold">
+              Enter
+            </kbd>{' '}
+            확정
+          </span>
+          <span className="text-stone-400">
+            <kbd className="px-1 py-0.5 rounded bg-stone-800 border border-stone-700 text-amber-300 font-mono text-[10px] font-bold">
+              Esc
+            </kbd>{' '}
+            취소
+          </span>
+        </div>
+      )}
+
+      {/* Arrow Properties Panel */}
+      {showArrowProperties && selectedElement && selectedElement.type === 'shape' && (
+        <ArrowPropertiesPanel
+          beginArrow={selectedElement.beginArrow}
+          endArrow={selectedElement.endArrow}
+          strokeWidth={selectedElement.strokeWidth}
+          strokeColor={selectedElement.stroke}
+          strokeDash={selectedElement.strokeDash as 'solid' | 'dashed' | 'dotted'}
+          lineCap={selectedElement.lineCap}
+          onPropertiesChange={handleArrowPropertiesChange}
+          onClose={() => setShowArrowProperties(false)}
+          isDefaults={false}
+          onSaveAsDefault={() => {
+            if (!selectedElement || selectedElement.type !== 'shape') return;
+            handleArrowDefaultsChange({
+              beginArrow: selectedElement.beginArrow,
+              endArrow: selectedElement.endArrow,
+              strokeWidth: selectedElement.strokeWidth,
+              strokeDash: selectedElement.strokeDash,
+              lineCap: selectedElement.lineCap || 'round',
+            });
+          }}
+        />
+      )}
+
+      {/* Bottom Status Info Bar */}
+      <div className="absolute bottom-2 right-4 bg-stone-900/90 backdrop-blur border border-stone-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-stone-400 flex items-center space-x-4 pointer-events-none z-10 shadow-lg">
+        {cropBox && cropBox.w >= 1 && cropBox.h >= 1 && (
+          <div>
+            크롭:{' '}
+            <span className="text-amber-400 font-semibold">
+              {Math.round(cropBox.w)} × {Math.round(cropBox.h)} px
+            </span>
+          </div>
+        )}
+        {croppingImage && imgCropBox.w >= 1 && imgCropBox.h >= 1 && !cropBox && (
+          <div>
+            크롭:{' '}
+            <span className="text-amber-400 font-semibold">
+              {Math.round(imgCropBox.w)} × {Math.round(imgCropBox.h)} px
+            </span>
+          </div>
+        )}
+        <div>
+          캔버스: <span className="text-stone-200">{config.width} × {config.height} px</span>
+        </div>
+        <div>
+          마우스: <span className="text-stone-200">{Math.round(cursorPos.x)}, {Math.round(cursorPos.y)}</span>
+        </div>
+        <div>
+          배율: <span className="text-amber-400 font-semibold">{Math.round(zoom * 100)}%</span>
+        </div>
+        {selectedElements.length > 1 ? (
+          <div className="text-amber-400 font-semibold">
+            선택: {selectedElements.length}개 개체 다중 선택됨
+          </div>
+        ) : selectedElement ? (
+          <div className="text-stone-300">
+            선택: {selectedElement.name || selectedElement.type} ({Math.round(selectedElement.width)}×{Math.round(selectedElement.height)})
+          </div>
+        ) : null}
+      </div>
+    </div>
+
+      {/* Reserve space for crop controls so they never obscure the crop area. */}
+      {(croppingImage || currentTool === 'crop') && (
+        <div className="shrink-0 max-h-[40%] overflow-y-auto bg-stone-900 border-t border-amber-500/40 cursor-default">
+          {croppingImage && (
             <div
-              style={{
-                position: 'absolute',
-                left: `${imgCropBox.x}px`,
-                top: `${imgCropBox.y + imgCropBox.h + 10}px`,
-              }}
-              className="pointer-events-auto flex items-center bg-stone-900 border border-stone-700 rounded-lg p-1.5 shadow-2xl space-x-1.5 z-40 text-xs text-stone-200 backdrop-blur whitespace-nowrap"
+              role="toolbar"
+              aria-label="이미지 자르기"
+              className="flex flex-wrap items-center justify-center gap-1.5 p-2 text-xs text-stone-200"
             >
               <div className="flex items-center px-1.5 font-mono text-[11px] text-amber-400 font-semibold border-r border-stone-700 pr-2">
                 <Crop className="w-3.5 h-3.5 mr-1" />
@@ -3870,223 +4041,97 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                 취소
               </button>
             </div>
-          </div>
-        )}
+          )}
+          {/* Canvas Crop – action bar (자동 자르기 / 적용 / 취소) */}
+          {currentTool === 'crop' && !croppingImageId && (
+            <div className="flex flex-col items-center gap-1.5 p-2">
+              <div role="toolbar" aria-label="캔버스 자르기" className="text-[11px] text-stone-200 flex flex-wrap justify-center items-center gap-2.5">
+                <span className="font-semibold text-amber-300">자르기</span>
 
-        {/* Crop Box Overlay */}
-        {cropBox && (
-          <div
-            style={{
-              left: `${cropBox.x}px`,
-              top: `${cropBox.y}px`,
-              width: `${cropBox.w}px`,
-              height: `${cropBox.h}px`,
-            }}
-            className={`absolute border-2 border-dashed border-amber-400 pointer-events-none z-30 transition-all duration-150 ${
-              isCropFlashing
-                ? 'bg-white/80 ring-4 ring-amber-400 shadow-2xl'
-                : 'bg-amber-500/15'
-            }`}
-          >
-            {/* Corner resize indicators */}
-            <div className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-amber-400 rounded-sm border border-stone-900 shadow-sm" />
-            <div className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-amber-400 rounded-sm border border-stone-900 shadow-sm" />
-            <div className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-amber-400 rounded-sm border border-stone-900 shadow-sm" />
-            <div className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-amber-400 rounded-sm border border-stone-900 shadow-sm" />
-          </div>
-        )}
-      </div>
+                {cropBox ? (
+                  <span className="font-mono text-[10px] text-stone-400">
+                    {Math.round(cropBox.w)} × {Math.round(cropBox.h)} px
+                  </span>
+                ) : (
+                  <span className="text-stone-500">영역을 드래그하거나 자동 자르기를 사용하세요</span>
+                )}
 
-      {/* Canvas Crop – action bar (자동 자르기 / 적용 / 취소) */}
-      {currentTool === 'crop' && !croppingImageId && (
-        <div className="absolute top-9 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1.5 pointer-events-none">
-          <div className="pointer-events-auto bg-stone-900/95 backdrop-blur border border-amber-500/50 rounded-lg px-3 py-1.5 text-[11px] text-stone-200 flex items-center gap-2.5 shadow-xl whitespace-nowrap">
-            <span className="font-semibold text-amber-300">자르기</span>
+                <span className="text-stone-700">|</span>
 
-            {cropBox ? (
-              <span className="font-mono text-[10px] text-stone-400">
-                {Math.round(cropBox.w)} × {Math.round(cropBox.h)} px
-              </span>
-            ) : (
-              <span className="text-stone-500">영역을 드래그하거나 자동 자르기를 사용하세요</span>
-            )}
+                <button
+                  type="button"
+                  onClick={handleAutoCropCanvas}
+                  disabled={isAutoCropping}
+                  className="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 disabled:opacity-40 disabled:cursor-wait text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 text-[11px] font-semibold rounded transition-colors flex items-center gap-1"
+                  title="객체가 있는 실제 영역을 감지해 크롭 박스를 맞춥니다"
+                >
+                  <Wand2 className={`w-3 h-3 ${isAutoCropping ? 'animate-pulse' : ''}`} />
+                  자동 자르기
+                </button>
 
-            <span className="text-stone-700">|</span>
+                <div
+                  className="flex items-center bg-stone-800 border border-stone-700 rounded overflow-hidden"
+                  title="자동 자르기 결과에 남길 여백(px)"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setAutoCropPadding((p) => Math.max(0, p - 2))}
+                    className="px-1 py-1 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-colors"
+                    aria-label="여백 줄이기"
+                  >
+                    <Minus className="w-2.5 h-2.5" />
+                  </button>
+                  <span className="w-7 text-center font-mono text-[10px] text-amber-400 font-semibold select-none">
+                    {autoCropPadding}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAutoCropPadding((p) => Math.min(200, p + 2))}
+                    className="px-1 py-1 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-colors"
+                    aria-label="여백 늘리기"
+                  >
+                    <Plus className="w-2.5 h-2.5" />
+                  </button>
+                </div>
 
-            <button
-              type="button"
-              onClick={handleAutoCropCanvas}
-              disabled={isAutoCropping}
-              className="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 disabled:opacity-40 disabled:cursor-wait text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 text-[11px] font-semibold rounded transition-colors flex items-center gap-1"
-              title="객체가 있는 실제 영역을 감지해 크롭 박스를 맞춥니다"
-            >
-              <Wand2 className={`w-3 h-3 ${isAutoCropping ? 'animate-pulse' : ''}`} />
-              자동 자르기
-            </button>
+                <span className="text-stone-700">|</span>
 
-            <div
-              className="flex items-center bg-stone-800 border border-stone-700 rounded overflow-hidden"
-              title="자동 자르기 결과에 남길 여백(px)"
-            >
-              <button
-                type="button"
-                onClick={() => setAutoCropPadding((p) => Math.max(0, p - 2))}
-                className="px-1 py-1 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-colors"
-                aria-label="여백 줄이기"
-              >
-                <Minus className="w-2.5 h-2.5" />
-              </button>
-              <span className="w-7 text-center font-mono text-[10px] text-amber-400 font-semibold select-none">
-                {autoCropPadding}
-              </span>
-              <button
-                type="button"
-                onClick={() => setAutoCropPadding((p) => Math.min(200, p + 2))}
-                className="px-1 py-1 text-stone-400 hover:text-stone-100 hover:bg-stone-700 transition-colors"
-                aria-label="여백 늘리기"
-              >
-                <Plus className="w-2.5 h-2.5" />
-              </button>
+                <button
+                  type="button"
+                  onClick={applyCrop}
+                  disabled={!cropBox || cropBox.w < 20 || cropBox.h < 20}
+                  className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-stone-950 font-bold text-[11px] rounded transition-colors"
+                  title="크롭 영역으로 캔버스 크기 변경 (Enter)"
+                >
+                  적용
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCropBox(null)}
+                  disabled={!cropBox}
+                  className="px-2 py-1 bg-stone-800 hover:bg-stone-700 disabled:opacity-40 disabled:cursor-not-allowed text-stone-300 text-[11px] rounded transition-colors"
+                  title="크롭 취소 (Esc)"
+                >
+                  취소
+                </button>
+              </div>
+
+              {autoCropNotice && (
+                <div className="pointer-events-none px-3 text-[10px] text-stone-300">
+                  {autoCropNotice}
+                </div>
+              )}
             </div>
+          )}
 
-            <span className="text-stone-700">|</span>
-
-            <button
-              type="button"
-              onClick={applyCrop}
-              disabled={!cropBox || cropBox.w < 20 || cropBox.h < 20}
-              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-stone-950 font-bold text-[11px] rounded transition-colors"
-              title="크롭 영역으로 캔버스 크기 변경 (Enter)"
-            >
-              적용
-            </button>
-            <button
-              type="button"
-              onClick={() => setCropBox(null)}
-              disabled={!cropBox}
-              className="px-2 py-1 bg-stone-800 hover:bg-stone-700 disabled:opacity-40 disabled:cursor-not-allowed text-stone-300 text-[11px] rounded transition-colors"
-              title="크롭 취소 (Esc)"
-            >
-              취소
-            </button>
-          </div>
-
-          {autoCropNotice && (
-            <div className="pointer-events-none bg-stone-900/95 backdrop-blur border border-stone-700 rounded-md px-3 py-1 text-[10px] text-stone-300 shadow-lg">
+          {/* Image Crop – auto crop notice */}
+          {croppingImageId && autoCropNotice && (
+            <div className="pointer-events-none px-3 pb-2 text-center text-[10px] text-stone-200">
               {autoCropNotice}
             </div>
           )}
         </div>
       )}
-
-      {currentTool === 'lasso' && (
-        <LassoActionBar
-          hasSelection={!!lasso.selection}
-          drawingPolygon={lasso.mode === 'polygon'}
-          busy={lasso.busy}
-          onAction={(action) => void lasso.runAction(action)}
-          onClear={lasso.clear}
-        />
-      )}
-
-      {pathEditElement && pathEditEditable && <PathEditHint onDone={() => onSetPathEditId?.(null)} />}
-
-      {/* Image Crop – auto crop notice */}
-      {croppingImageId && autoCropNotice && (
-        <div className="absolute top-9 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-stone-900/95 backdrop-blur border border-stone-700 rounded-md px-3 py-1.5 text-[10px] text-stone-200 shadow-lg whitespace-nowrap">
-          {autoCropNotice}
-        </div>
-      )}
-
-      {/* Radial Array – step guide banner */}
-      {currentTool === 'radial' && radialToolState && radialToolState.step !== 'idle' && (
-        <div className="absolute top-9 left-1/2 -translate-x-1/2 z-20 bg-stone-900/95 backdrop-blur border border-amber-500/50 rounded-lg px-3.5 py-2 text-[11px] text-stone-200 flex items-center gap-3 shadow-xl pointer-events-none">
-          <span className="font-semibold text-amber-300">방사상 배열</span>
-          <span className="text-stone-400">
-            {radialToolState.step === 'placing_center'
-              ? '① 캔버스를 클릭해 중심점 지정'
-              : radialToolState.step === 'adjusting_radius'
-              ? '② 마우스를 움직여 반지름 조절'
-              : '③ 반지름 고정됨'}
-          </span>
-          <span className="text-stone-600">|</span>
-          <span className="text-stone-400">
-            <kbd className="px-1 py-0.5 rounded bg-stone-800 border border-stone-700 text-amber-300 font-mono text-[10px] font-bold">
-              Enter
-            </kbd>{' '}
-            확정
-          </span>
-          <span className="text-stone-400">
-            <kbd className="px-1 py-0.5 rounded bg-stone-800 border border-stone-700 text-amber-300 font-mono text-[10px] font-bold">
-              Esc
-            </kbd>{' '}
-            취소
-          </span>
-        </div>
-      )}
-
-      {/* Arrow Properties Panel */}
-      {showArrowProperties && selectedElement && selectedElement.type === 'shape' && (
-        <ArrowPropertiesPanel
-          beginArrow={selectedElement.beginArrow}
-          endArrow={selectedElement.endArrow}
-          strokeWidth={selectedElement.strokeWidth}
-          strokeColor={selectedElement.stroke}
-          strokeDash={selectedElement.strokeDash as 'solid' | 'dashed' | 'dotted'}
-          lineCap={selectedElement.lineCap}
-          onPropertiesChange={handleArrowPropertiesChange}
-          onClose={() => setShowArrowProperties(false)}
-          isDefaults={false}
-          onSaveAsDefault={() => {
-            if (!selectedElement || selectedElement.type !== 'shape') return;
-            handleArrowDefaultsChange({
-              beginArrow: selectedElement.beginArrow,
-              endArrow: selectedElement.endArrow,
-              strokeWidth: selectedElement.strokeWidth,
-              strokeDash: selectedElement.strokeDash,
-              lineCap: selectedElement.lineCap || 'round',
-            });
-          }}
-        />
-      )}
-
-      {/* Bottom Status Info Bar */}
-      <div className="absolute bottom-2 right-4 bg-stone-900/90 backdrop-blur border border-stone-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-stone-400 flex items-center space-x-4 pointer-events-none z-10 shadow-lg">
-        {cropBox && cropBox.w >= 1 && cropBox.h >= 1 && (
-          <div>
-            크롭:{' '}
-            <span className="text-amber-400 font-semibold">
-              {Math.round(cropBox.w)} × {Math.round(cropBox.h)} px
-            </span>
-          </div>
-        )}
-        {croppingImage && imgCropBox.w >= 1 && imgCropBox.h >= 1 && !cropBox && (
-          <div>
-            크롭:{' '}
-            <span className="text-amber-400 font-semibold">
-              {Math.round(imgCropBox.w)} × {Math.round(imgCropBox.h)} px
-            </span>
-          </div>
-        )}
-        <div>
-          캔버스: <span className="text-stone-200">{config.width} × {config.height} px</span>
-        </div>
-        <div>
-          마우스: <span className="text-stone-200">{Math.round(cursorPos.x)}, {Math.round(cursorPos.y)}</span>
-        </div>
-        <div>
-          배율: <span className="text-amber-400 font-semibold">{Math.round(zoom * 100)}%</span>
-        </div>
-        {selectedElements.length > 1 ? (
-          <div className="text-amber-400 font-semibold">
-            선택: {selectedElements.length}개 개체 다중 선택됨
-          </div>
-        ) : selectedElement ? (
-          <div className="text-stone-300">
-            선택: {selectedElement.name || selectedElement.type} ({Math.round(selectedElement.width)}×{Math.round(selectedElement.height)})
-          </div>
-        ) : null}
-      </div>
     </div>
   );
 };

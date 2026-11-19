@@ -259,7 +259,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       titleId="export-dialog-title"
-      panelClassName="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-xl w-full max-h-[90vh] overflow-y-auto p-6 text-stone-200 select-none"
+      panelClassName="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-xl w-full max-h-[90vh] max-md:max-w-[calc(100vw-16px)] max-md:max-h-[calc(100dvh-16px)] overflow-y-auto p-6 text-stone-200 select-none"
     >
         {/* Modal Header */}
         <div className="flex items-center justify-between pb-4 border-b border-stone-800">

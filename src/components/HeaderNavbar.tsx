@@ -90,7 +90,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
   };
 
   return (
-    <header className="h-14 bg-stone-900 border-b border-stone-800 text-stone-200 px-3 flex items-center gap-2 select-none z-30 shrink-0 overflow-x-auto">
+    <header className="h-12 md:h-14 bg-stone-900 border-b border-stone-800 text-stone-200 px-2 md:px-3 flex items-center gap-2 select-none z-30 shrink-0 overflow-x-auto whitespace-nowrap md:whitespace-normal no-scrollbar-mobile">
       {/* Hidden file inputs */}
       <input
         ref={projectInputRef}
@@ -108,12 +108,13 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
       />
 
       {/* Brand & File Operations */}
-      <div className="flex items-center space-x-2">
-        <div className="flex items-center space-x-2 mr-3 pr-3 border-r border-stone-800">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-amber-500 to-rose-500 flex items-center justify-center shadow-sm">
+      <div className="flex items-center space-x-2 shrink-0">
+        <div className="flex items-center space-x-2 mr-3 pr-3 border-r border-stone-800 shrink-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-amber-500 to-rose-500 flex items-center justify-center shadow-sm shrink-0">
             <span className="font-bold text-white text-sm tracking-tighter">IM</span>
           </div>
-          <div>
+          {/* Decorative wordmark — the IM logo identifies the app on phones. */}
+          <div className="hidden md:block">
             <h1 className="font-semibold text-sm text-stone-100 leading-tight">imgman</h1>
             <p className="text-[11px] text-stone-400">Image & Vector Studio</p>
           </div>
@@ -181,9 +182,9 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
       </div>
 
       {/* Center: History & View Controls */}
-      <div className="flex items-center space-x-1">
+      <div className="flex items-center space-x-1 shrink-0">
         {/* Undo / Redo */}
-        <div className="flex items-center space-x-1 px-2 border-r border-stone-800">
+        <div className="flex items-center space-x-1 px-2 border-r border-stone-800 shrink-0">
           <button
             id="btn-undo"
             onClick={onUndo}
@@ -221,7 +222,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
         </div>
 
         {/* View toggles: Grid, Ruler, Snap */}
-        <div className="flex items-center space-x-1 px-2 border-r border-stone-800">
+        <div className="flex items-center space-x-1 px-2 border-r border-stone-800 shrink-0">
           <button
             id="btn-toggle-ruler"
             onClick={() => onUpdateConfig({ showRulers: !config.showRulers })}
@@ -276,7 +277,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
         </div>
 
         {/* Zoom Controls */}
-        <div className="flex items-center space-x-1.5 px-2">
+        <div className="flex items-center space-x-1.5 px-2 shrink-0">
           <button
             id="btn-zoom-out"
             onClick={() => onZoomChange(clampManualZoom(zoom - 0.1, zoom))}
@@ -338,7 +339,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
       <button
         id="btn-shortcuts"
         onClick={onOpenShortcuts}
-        className="ml-auto p-1.5 rounded text-stone-400 hover:text-stone-200 hover:bg-stone-800 transition-colors"
+        className="ml-auto p-1.5 rounded text-stone-400 hover:text-stone-200 hover:bg-stone-800 transition-colors shrink-0"
         title="단축키 안내"
       >
         <Keyboard className="w-4 h-4" />

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import {
   MousePointer,
@@ -37,6 +37,7 @@ import { ToolType, ShapeType, CanvasElement } from '../types';
 import { OFFICE_THEME_PALETTES } from '../utils/colorUtils';
 import { ColorPickerPopover } from './ColorPickerPopover';
 import { RadialArrayIcon } from './RadialArrayIcon';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 interface ToolbarProps {
   currentTool: ToolType;
@@ -114,12 +115,33 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const arrowMenuRef = useRef<HTMLDivElement>(null);
   const eyedropperBtnRef = useRef<HTMLButtonElement>(null);
   const colorPaletteRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const selectClickTimerRef = useRef<NodeJS.Timeout | null>(null);
   const arrowClickTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isMobile = useIsMobile();
+  /** Vertical anchor (px) for mobile popovers laid out below the wrapped toolbar. */
+  const [menuTop, setMenuTop] = useState(0);
 
-  // Close shape / arrow / color menus when clicking outside
+  // On phones the toolbar wraps to several rows, so anchor popovers to its
+  // measured bottom edge instead of a hard-coded desktop offset.
+  useLayoutEffect(() => {
+    if (!isMobile) return;
+    const updateMenuTop = () => {
+      const rect = toolbarRef.current?.getBoundingClientRect();
+      if (rect) setMenuTop(rect.bottom + 4);
+    };
+    updateMenuTop();
+    window.addEventListener('resize', updateMenuTop);
+    window.addEventListener('orientationchange', updateMenuTop);
+    return () => {
+      window.removeEventListener('resize', updateMenuTop);
+      window.removeEventListener('orientationchange', updateMenuTop);
+    };
+  }, [isMobile, showShapeMenu, showArrowMenu, showColorPalette]);
+
+  // Close shape / arrow / color menus when clicking or tapping outside
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    const handleClickOutside = (e: Event) => {
       const target = e.target as Node;
       if (shapeMenuRef.current && !shapeMenuRef.current.contains(target)) {
         setShowShapeMenu(false);
@@ -135,8 +157,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
       if (selectClickTimerRef.current) {
         clearTimeout(selectClickTimerRef.current);
       }
@@ -236,9 +260,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   };
 
   return (
-    <div className="h-12 bg-stone-900/95 border-b border-stone-800 text-stone-200 px-4 flex items-center justify-between select-none z-20 shrink-0 overflow-visible">
+    <div
+      ref={toolbarRef}
+      className="h-auto min-h-12 md:h-12 bg-stone-900/95 border-b border-stone-800 text-stone-200 px-2 md:px-4 py-1 md:py-0 flex flex-wrap md:flex-nowrap items-center justify-start md:justify-between gap-x-1 md:gap-x-0 gap-y-1 select-none z-20 shrink-0 overflow-visible toolbar-touch-targets"
+    >
       {/* Left: Tools List */}
-      <div className="flex items-center space-x-1">
+      <div className="max-md:contents md:flex md:flex-nowrap items-center gap-1">
         {/* Select Tool */}
         <button
           id="tool-select"
@@ -390,7 +417,17 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
 
           {showArrowMenu && (
-            <div className="absolute left-0 top-full mt-1.5 w-52 bg-stone-900 border border-stone-700 rounded-lg shadow-2xl p-2 z-50">
+            <div
+              className="fixed left-2 right-2 top-14 z-50 mt-1 max-h-[calc(100dvh-8rem)] max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg border border-stone-700 bg-stone-900 p-2 shadow-2xl md:absolute md:left-0 md:right-auto md:top-full md:mt-1.5 md:max-h-none md:overflow-visible md:max-w-none md:w-52"
+              style={
+                isMobile
+                  ? {
+                      top: menuTop,
+                      maxHeight: `calc(100dvh - ${menuTop}px - 8px)`,
+                    }
+                  : undefined
+              }
+            >
               <div className="text-[11px] font-semibold text-stone-400 px-2 py-1">
                 화살표 선 종류 (파워포인트 스타일)
               </div>
@@ -456,7 +493,17 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
 
           {showShapeMenu && (
-            <div className="absolute left-0 top-full mt-1.5 w-60 bg-stone-900 border border-stone-700 rounded-lg shadow-2xl p-2 z-50 grid grid-cols-2 gap-1 max-h-80 overflow-y-auto">
+            <div
+              className="fixed left-2 right-2 top-14 z-50 mt-1 grid max-h-[calc(100dvh-8rem)] max-w-[calc(100vw-16px)] grid-cols-2 gap-1 overflow-y-auto rounded-lg border border-stone-700 bg-stone-900 p-2 shadow-2xl md:absolute md:left-0 md:right-auto md:top-full md:mt-1.5 md:max-h-80 md:max-w-none md:w-60"
+              style={
+                isMobile
+                  ? {
+                      top: menuTop,
+                      maxHeight: `calc(100dvh - ${menuTop}px - 8px)`,
+                    }
+                  : undefined
+              }
+            >
               <div className="col-span-2 text-[11px] font-semibold text-stone-400 px-2 py-1">
                 MS 파워포인트 도형 모음 ({SHAPE_ITEMS.length}종) · 고른 도형을 기억합니다
               </div>
@@ -536,7 +583,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <div
               ref={colorPaletteRef}
               id="color-palette-panel"
-              className="fixed z-[60] top-[6.75rem] right-[18.75rem] w-[12.6rem] bg-stone-900/95 border border-stone-700 rounded-lg shadow-2xl overflow-hidden backdrop-blur-sm"
+              className="fixed left-2 right-2 top-14 z-[60] w-auto max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-stone-700 bg-stone-900/95 shadow-2xl backdrop-blur-sm max-md:max-h-[calc(100dvh-16px)] max-md:overflow-y-auto md:left-auto md:right-[18.75rem] md:top-[6.75rem] md:w-[12.6rem] md:max-w-none"
+              style={isMobile ? { top: menuTop, maxHeight: `calc(100dvh - ${menuTop}px - 8px)` } : undefined}
             >
               <div className="flex items-center justify-between px-2 py-1.5 border-b border-stone-800">
                 <div className="flex items-center gap-1 text-[10px] font-semibold text-stone-200">
@@ -671,7 +719,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </button>
 
         {/* Group / Ungroup Tools */}
-        <div className="flex items-center space-x-1 px-2 border-l border-stone-800">
+        <div className="flex items-center space-x-1 px-2 max-md:px-0 border-l max-md:border-l-0 border-stone-800">
           <button
             id="tool-group"
             onClick={onGroup}
@@ -705,7 +753,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       </div>
 
       {/* Center/Right: Stroke Width & Quick Color Palette */}
-      <div className="flex items-center space-x-3">
+      <div className="max-md:contents md:flex md:flex-nowrap items-center gap-x-3">
         {/* Stroke Width Selector */}
         <div className="flex items-center space-x-1.5 px-2 border-l border-stone-800">
           <span className="text-xs text-stone-400 mr-1 hidden sm:inline">두께:</span>
@@ -732,7 +780,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
 
         {/* Primary Color Selector — opens gradient picker + color wheel */}
-        <div className="flex items-center pl-2 border-l border-stone-800">
+        <div className="flex items-center pl-2 max-md:pl-0 border-l max-md:border-l-0 border-stone-800">
           <button
             ref={colorPickerBtnRef}
             id="primary-color-button"

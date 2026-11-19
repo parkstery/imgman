@@ -23,6 +23,8 @@ import { ShortcutsGuideModal } from './components/ShortcutsGuideModal';
 import { NewCanvasModal } from './components/NewCanvasModal';
 import { ClipboardGuideModal } from './components/ClipboardGuideModal';
 import { HistoryPanel } from './components/HistoryPanel';
+import { Layers, Sliders } from 'lucide-react';
+import { useIsMobile } from './hooks/useIsMobile';
 import {
   AutosaveRecord,
   clearAutosave,
@@ -181,7 +183,7 @@ export default function App() {
   }, []);
   const [primaryColor, setPrimaryColor] = useState<string>('#FF0000');
   const [strokeWidth, setStrokeWidth] = useState<number>(2);
-  const [zoom, setZoom] = useState<number>(0.9);
+  const [zoom, setZoom] = useState<number>(0.7);
   const [zoomFitActive, setZoomFitActive] = useState(false);
   const [fitNonce, setFitNonce] = useState(0);
 
@@ -206,9 +208,20 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toastMessage]);
 
-  // Left & Right Panels Collapse State
-  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  // Left & Right Panels Collapse State — both closed on phones at startup.
+  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState<boolean>(
+    () =>
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !== 'function' ||
+      !window.matchMedia('(max-width: 767px)').matches
+  );
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState<boolean>(
+    () =>
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !== 'function' ||
+      !window.matchMedia('(max-width: 767px)').matches
+  );
+  const isMobile = useIsMobile();
 
   // PowerPoint-style Image Cropping State
   const [croppingImageId, setCroppingImageId] = useState<string | null>(null);
@@ -545,11 +558,14 @@ export default function App() {
 
   const toggleLeftPanel = useCallback(() => {
     setIsLeftPanelOpen((prev) => !prev);
-  }, []);
+    // On phones the panels are drawers: only one can be open at a time.
+    if (isMobile) setIsRightPanelOpen(false);
+  }, [isMobile]);
 
   const toggleRightPanel = useCallback(() => {
     setIsRightPanelOpen((prev) => !prev);
-  }, []);
+    if (isMobile) setIsLeftPanelOpen(false);
+  }, [isMobile]);
 
   /**
    * Rebuild the preview copies whenever one of the radial parameters changes
@@ -2386,8 +2402,8 @@ export default function App() {
     });
     setRestoreOffer(null);
     setAutosaveSavedAt(rec.savedAt);
-    setZoomFitActive(true);
-    setFitNonce((n) => n + 1);
+    setZoom(0.7);
+    setZoomFitActive(false);
     showToast('자동 저장된 작업을 복구했습니다.');
   }, [restoreOffer, resetHistorySnapshot, showToast]);
 
@@ -2846,7 +2862,7 @@ export default function App() {
     <div
       onMouseEnter={() => window.focus()}
       onClick={() => window.focus()}
-      className="flex h-screen w-screen overflow-hidden bg-stone-950 font-sans text-stone-100"
+      className="flex h-dvh w-full overflow-hidden bg-stone-950 font-sans text-stone-100"
     >
       <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-visible">
       {/* 1. Header Navigation Bar */}
@@ -2910,7 +2926,15 @@ export default function App() {
           onUpdateLayer={handleUpdateLayer}
           elements={elements}
           selectedElementId={selectedElementId}
-          onSelectElement={handleSelectElement}
+          selectedElementIds={selectedElementIds}
+          onSelectElement={(id) => {
+            handleSelectTool('select');
+            handleSelectElement(id);
+          }}
+          onSelectMultipleElements={(ids) => {
+            handleSelectTool('select');
+            handleSelectMultipleElements(ids);
+          }}
           isOpen={isLeftPanelOpen}
           onToggleCollapse={toggleLeftPanel}
           historyCount={documentHistory.snapshots.length}
@@ -3057,6 +3081,42 @@ export default function App() {
           }}
           onConvertToPath={handleConvertToPath}
       />
+
+      {/* Mobile-only floating panel toggles (desktop uses the w-10 rails). */}
+      <div className="md:hidden fixed left-3 z-30 bottom-[calc(env(safe-area-inset-bottom)+52px)]">
+        <button
+          type="button"
+          onClick={toggleLeftPanel}
+          aria-label="레이어"
+          title="레이어 패널 (단축키: [)"
+          className="w-11 h-11 min-w-11 min-h-11 rounded-full flex items-center justify-center bg-stone-900/95 border border-amber-500/50 text-amber-400 shadow-lg backdrop-blur-sm active:scale-95 transition-transform"
+        >
+          <Layers className="w-5 h-5" />
+        </button>
+      </div>
+      <div className="md:hidden fixed right-3 z-30 bottom-[calc(env(safe-area-inset-bottom)+52px)]">
+        <button
+          type="button"
+          onClick={toggleRightPanel}
+          aria-label="속성"
+          title="속성 패널 (단축키: ])"
+          className="w-11 h-11 min-w-11 min-h-11 rounded-full flex items-center justify-center bg-stone-900/95 border border-amber-500/50 text-amber-400 shadow-lg backdrop-blur-sm active:scale-95 transition-transform"
+        >
+          <Sliders className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Mobile drawer backdrop — tapping it closes the open panel. */}
+      {(isLeftPanelOpen || isRightPanelOpen) && (
+        <div
+          aria-hidden="true"
+          onClick={() => {
+            setIsLeftPanelOpen(false);
+            setIsRightPanelOpen(false);
+          }}
+          className="md:hidden fixed inset-0 z-30 bg-black/50"
+        />
+      )}
 
       {/* Modals */}
       <ExportModal

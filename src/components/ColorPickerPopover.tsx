@@ -100,7 +100,7 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({ anchorRe
 
   // Close on outside press / Esc (capture so the canvas doesn't also react to Esc)
   useEffect(() => {
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: Event) => {
       const t = e.target as Node;
       if (panelRef.current?.contains(t) || anchorRef.current?.contains(t)) return;
       onClose();
@@ -112,9 +112,11 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({ anchorRe
       onClose();
     };
     document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
     window.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
       window.removeEventListener('keydown', onKey, true);
     };
   }, [anchorRef, onClose]);
@@ -190,8 +192,13 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({ anchorRe
       id="color-picker-popover"
       role="dialog"
       aria-label="색상 선택"
-      className="fixed z-[60] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl overflow-x-hidden overflow-y-auto select-none"
-      style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH, maxHeight: pos.maxHeight }}
+      className="fixed z-[60] max-w-[calc(100vw-16px)] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl overflow-x-hidden overflow-y-auto select-none"
+      style={{
+        left: pos.left,
+        top: pos.top,
+        width: `min(${POPOVER_WIDTH}px, calc(100vw - 16px))`,
+        maxHeight: pos.maxHeight,
+      }}
     >
       {/* Saturation / value square */}
       <div

@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { FONT_FAMILIES } from '../utils/colorUtils';
 import { finalizeArcGeometry } from '../utils/shapeGenerators';
+import { fitImageToCanvas } from '../utils/fitImageToCanvas';
 import { getArrowPreset } from '../utils/arrowUtils';
 import { canConvertToPath, refitPathElement } from '../utils/pathNodes';
 import {
@@ -43,6 +44,7 @@ import {
   Check,
   X,
   Pipette,
+  Maximize,
 } from 'lucide-react';
 import { RadialArrayIcon } from './RadialArrayIcon';
 import { NumberField } from './NumberField';
@@ -232,7 +234,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     return (
       <aside
         onClick={onToggleCollapse}
-        className="w-10 h-full min-h-0 bg-stone-900 border-l border-stone-800 text-stone-200 flex flex-col items-center py-3 select-none text-xs shrink-0 cursor-pointer hover:bg-stone-850 transition-colors group"
+        className="w-10 h-full min-h-0 bg-stone-900 border-l border-stone-800 text-stone-200 hidden md:flex flex-col items-center py-3 select-none text-xs shrink-0 cursor-pointer hover:bg-stone-850 transition-colors group"
         title="속성 패널 펼치기 (단축키: ])"
       >
         <button
@@ -259,7 +261,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   if (!selectedElement) {
     // Canvas settings when nothing is selected
     return (
-      <aside className="w-72 h-full min-h-0 bg-stone-900 border-l border-stone-800 text-stone-200 p-4 flex flex-col space-y-5 overflow-y-auto overscroll-contain text-xs shrink-0 select-none *:shrink-0">
+      <aside className="fixed inset-y-0 right-0 z-40 w-72 max-w-[85vw] h-full min-h-0 bg-stone-900 border-l border-stone-800 text-stone-200 p-4 pb-[calc(env(safe-area-inset-bottom)+16px)] flex flex-col space-y-5 overflow-y-auto overscroll-contain text-xs shrink-0 select-none *:shrink-0 shadow-2xl md:static md:z-auto md:w-72 md:max-w-none md:shadow-none md:pb-4">
         <div className="flex items-center justify-between pb-2 border-b border-stone-800">
           <div>
             <h2 className="font-semibold text-sm text-stone-100 mb-0.5">캔버스 속성</h2>
@@ -488,6 +490,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
   const text = isText ? (selectedElement as TextElement) : null;
   const img = isImage ? (selectedElement as ImageElement) : null;
+  const fittedImage = img ? fitImageToCanvas(img, config) : null;
 
   // Changing a control invalidates the old preview (it no longer matches).
   const invalidateBackgroundPreview = () => {
@@ -495,7 +498,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   };
 
   return (
-    <aside className="w-72 h-full min-h-0 bg-stone-900 border-l border-stone-800 text-stone-200 p-4 flex flex-col space-y-4 overflow-y-auto overscroll-contain text-xs shrink-0 select-none *:shrink-0">
+    <aside className="fixed inset-y-0 right-0 z-40 w-72 max-w-[85vw] h-full min-h-0 bg-stone-900 border-l border-stone-800 text-stone-200 p-4 pb-[calc(env(safe-area-inset-bottom)+16px)] flex flex-col space-y-4 overflow-y-auto overscroll-contain text-xs shrink-0 select-none *:shrink-0 shadow-2xl md:static md:z-auto md:w-72 md:max-w-none md:shadow-none md:pb-4">
       {/* Header with Title and Quick Actions */}
       <div className="flex items-center justify-between pb-3 border-b border-stone-800">
         <div>
@@ -720,6 +723,22 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             )}
             <span>비율 고정 (Lock)</span>
           </label>
+        )}
+
+        {img && (
+          <button
+            type="button"
+            onClick={() => {
+              if (!fittedImage || isElementLocked || croppingImageId === img.id) return;
+              onUpdateElement({ ...img, ...fittedImage });
+            }}
+            disabled={!fittedImage || isElementLocked || croppingImageId === img.id}
+            className="w-full flex items-center justify-center gap-1.5 rounded-md border border-amber-500/50 bg-amber-500/15 px-2 py-2 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            title="가로세로 비율과 회전을 유지하며 캔버스 안에 들어가는 최대 크기로 맞추고 중앙에 배치합니다"
+          >
+            <Maximize className="w-3.5 h-3.5 shrink-0" />
+            캔버스에 최대 크기로 맞추기
+          </button>
         )}
 
         <div className="grid grid-cols-2 gap-2">

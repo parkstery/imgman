@@ -1,1 +1,35 @@
 @import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  /* No pull-to-refresh / rubber-band while drawing on touch devices. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * Mobile-only helpers. Everything here is scoped below the `md` breakpoint so
+ * the desktop layout is unaffected.
+ */
+@media (max-width: 767px) {
+  /* Single-row header keeps horizontal scrolling but hides its scrollbar. */
+  .no-scrollbar-mobile {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .no-scrollbar-mobile::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Comfortable touch targets for the wrapping mobile toolbar. */
+  .toolbar-touch-targets button {
+    min-width: 36px;
+    min-height: 36px;
+  }
+}

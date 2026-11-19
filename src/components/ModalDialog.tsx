@@ -140,7 +140,7 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({
     <div
       className={
         overlayClassName ??
-        'fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4'
+        'fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-2 md:p-4'
       }
       onMouseDown={(e) => {
         if (closeOnBackdrop && e.target === e.currentTarget) onClose();
@@ -152,7 +152,7 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={panelClassName}
+        className={`max-md:max-w-[calc(100vw-16px)] max-md:max-h-[calc(100dvh-16px)] max-md:overflow-y-auto ${panelClassName ?? ''}`}
       >
         {children}
       </div>

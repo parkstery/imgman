@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Layer,
   CanvasElement,
@@ -39,7 +39,9 @@ interface LayersPanelProps {
   onUpdateLayer: (updated: Layer) => void;
   elements: CanvasElement[];
   selectedElementId: string | null;
+  selectedElementIds: string[];
   onSelectElement: (id: string | null) => void;
+  onSelectMultipleElements: (ids: string[]) => void;
   isOpen?: boolean;
   onToggleCollapse?: () => void;
   /** Rendered in the "History" tab */
@@ -61,7 +63,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   onUpdateLayer,
   elements,
   selectedElementId,
+  selectedElementIds,
   onSelectElement,
+  onSelectMultipleElements,
   isOpen = true,
   onToggleCollapse,
   historyPanel,
@@ -70,6 +74,26 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [tab, setTab] = useState<'layers' | 'history'>('layers');
   const [editingName, setEditingName] = useState('');
+  const selectionAnchor = useRef<string | null>(null);
+
+  const selectObject = (id: string, orderedIds: string[], toggle: boolean, range: boolean) => {
+    const anchorIndex = orderedIds.indexOf(selectionAnchor.current ?? selectedElementId ?? '');
+    const targetIndex = orderedIds.indexOf(id);
+    if (range && anchorIndex >= 0 && targetIndex >= 0) {
+      const rangeIds = orderedIds.slice(Math.min(anchorIndex, targetIndex), Math.max(anchorIndex, targetIndex) + 1);
+      const next = toggle ? [...new Set([...selectedElementIds, ...rangeIds])] : rangeIds;
+      // The clicked object remains the primary selection in the properties panel.
+      onSelectMultipleElements([...next.filter((item) => item !== id), id]);
+    } else if (toggle) {
+      onSelectMultipleElements(selectedElementIds.includes(id)
+        ? selectedElementIds.filter((item) => item !== id)
+        : [...selectedElementIds, id]);
+      selectionAnchor.current = id;
+    } else {
+      onSelectElement(id);
+      selectionAnchor.current = id;
+    }
+  };
 
   const activeLayer = layers.find((l) => l.id === activeLayerId) || layers[0];
   // layers[]: index 0 = backmost, last = frontmost. Panel lists reverse (top = front).
@@ -128,7 +152,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     return (
       <aside
         onClick={onToggleCollapse}
-        className="w-10 bg-stone-900 border-r border-stone-800 text-stone-200 flex flex-col items-center py-3 select-none text-xs shrink-0 cursor-pointer hover:bg-stone-850 transition-colors group"
+        className="w-10 bg-stone-900 border-r border-stone-800 text-stone-200 hidden md:flex flex-col items-center py-3 select-none text-xs shrink-0 cursor-pointer hover:bg-stone-850 transition-colors group"
         title="레이어 패널 펼치기 (단축키: [)"
       >
         <button
@@ -156,7 +180,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   }
 
   return (
-    <aside className="w-64 min-h-0 h-full bg-stone-900 border-r border-stone-800 text-stone-200 flex flex-col shrink-0 select-none text-xs">
+    <aside className="fixed inset-y-0 left-0 z-40 w-72 max-w-[85vw] h-full min-h-0 bg-stone-900 border-r border-stone-800 text-stone-200 flex flex-col shrink-0 select-none text-xs shadow-2xl pb-[env(safe-area-inset-bottom)] md:static md:z-auto md:w-64 md:max-w-none md:shadow-none md:pb-0">
       {/* Title row — always a single horizontal line */}
       <div className="px-3 pt-3 pb-1.5 border-b border-stone-800/80 flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-1 min-w-0 font-semibold whitespace-nowrap" role="tablist">
@@ -321,6 +345,37 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           </button>
       </div>
 
+      <div className="px-3 py-2 border-b border-stone-800 space-y-1.5 shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              aria-label="전체 객체 선택"
+              checked={elements.length > 0 && elements.every((el) => selectedElementIds.includes(el.id))}
+              ref={(node) => {
+                if (node) node.indeterminate = selectedElementIds.length > 0 && !elements.every((el) => selectedElementIds.includes(el.id));
+              }}
+              disabled={elements.length === 0}
+              onChange={(e) => {
+                selectionAnchor.current = null;
+                onSelectMultipleElements(e.target.checked ? elements.map((el) => el.id) : []);
+              }}
+              className="accent-amber-500"
+              title="모든 레이어의 객체를 한 번에 선택 / 해제"
+            />
+            전체 선택
+          </label>
+          <span className="text-[10px] text-amber-400" aria-live="polite">{selectedElementIds.length}개 선택</span>
+          <button
+            type="button"
+            onClick={() => { selectionAnchor.current = null; onSelectMultipleElements([]); }}
+            disabled={selectedElementIds.length === 0}
+            className="text-[10px] text-stone-400 hover:text-white disabled:opacity-40"
+          >선택 해제</button>
+        </div>
+        <p className="text-[10px] text-stone-500">체크박스·Ctrl/⌘: 다중 선택 · Shift: 범위 선택</p>
+      </div>
+
       {/* Layer Stack (Rendered in reverse order: top layer on top) */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {[...layers].reverse().map((layer) => {
@@ -429,13 +484,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
               {isActive && layerElements.length > 0 && (
                 <div className="px-2 pb-2 pt-0.5 space-y-0.5">
                   {[...layerElements].reverse().map((el) => {
-                    const isSelected = el.id === selectedElementId;
+                    const isSelected = selectedElementIds.includes(el.id);
                     return (
                       <div
                         key={el.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          onSelectElement(el.id);
+                          selectObject(el.id, [...layerElements].reverse().map((item) => item.id), e.ctrlKey || e.metaKey, e.shiftKey);
                         }}
                         className={`flex items-center space-x-1.5 px-2 py-1 rounded text-[11px] cursor-pointer transition-colors ${
                           isSelected
@@ -443,6 +498,14 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                             : 'hover:bg-stone-700/50 text-stone-400 hover:text-stone-200'
                         }`}
                       >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          aria-label={`${el.name || el.type} 선택`}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => selectObject(el.id, [], true, false)}
+                          className="accent-amber-500 shrink-0"
+                        />
                         {getElementIcon(el.type)}
                         <span className="truncate flex-1 min-w-0">
                           {el.name || (el.type === 'shape' ? (el as any).shapeType : el.type)}

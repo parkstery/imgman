@@ -52,7 +52,7 @@ export const NewCanvasModal: React.FC<NewCanvasModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       titleId="new-canvas-dialog-title"
-      panelClassName="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-lg w-full p-6 text-stone-200 select-none"
+      panelClassName="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl max-w-lg w-full max-md:max-w-[calc(100vw-16px)] max-md:max-h-[calc(100dvh-16px)] max-md:overflow-y-auto p-6 text-stone-200 select-none"
     >
         <div className="flex items-center justify-between pb-3 border-b border-stone-800">
           <div className="flex items-center space-x-2">
@@ -76,7 +76,7 @@ export const NewCanvasModal: React.FC<NewCanvasModalProps> = ({
           {/* Presets */}
           <div>
             <label className="text-stone-300 font-medium block mb-2">규격 프리셋</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {PRESETS.map((p) => (
                 <button
                   key={p.name}
@@ -99,7 +99,7 @@ export const NewCanvasModal: React.FC<NewCanvasModalProps> = ({
           </div>
 
           {/* Custom dimensions */}
-          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-stone-800">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-stone-800">
             <div>
               <span className="text-[11px] text-stone-400 block mb-1">가로 너비 (px)</span>
               <input

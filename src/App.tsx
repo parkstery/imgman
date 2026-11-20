@@ -2927,6 +2927,7 @@ export default function App() {
           elements={elements}
           selectedElementId={selectedElementId}
           selectedElementIds={selectedElementIds}
+          onDeleteSelectedElements={handleDeleteSelectedElements}
           onSelectElement={(id) => {
             handleSelectTool('select');
             handleSelectElement(id);

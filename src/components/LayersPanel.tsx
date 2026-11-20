@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { canEditElement } from '../utils/lockGuards';
 import {
   Layer,
   CanvasElement,
@@ -42,6 +43,7 @@ interface LayersPanelProps {
   selectedElementIds: string[];
   onSelectElement: (id: string | null) => void;
   onSelectMultipleElements: (ids: string[]) => void;
+  onDeleteSelectedElements: () => void;
   isOpen?: boolean;
   onToggleCollapse?: () => void;
   /** Rendered in the "History" tab */
@@ -66,6 +68,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   selectedElementIds,
   onSelectElement,
   onSelectMultipleElements,
+  onDeleteSelectedElements,
   isOpen = true,
   onToggleCollapse,
   historyPanel,
@@ -75,6 +78,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const [tab, setTab] = useState<'layers' | 'history'>('layers');
   const [editingName, setEditingName] = useState('');
   const selectionAnchor = useRef<string | null>(null);
+  const deletableCount = elements.filter(
+    (el) => selectedElementIds.includes(el.id) && canEditElement(el, layers)
+  ).length;
 
   const selectObject = (id: string, orderedIds: string[], toggle: boolean, range: boolean) => {
     const anchorIndex = orderedIds.indexOf(selectionAnchor.current ?? selectedElementId ?? '');
@@ -374,6 +380,19 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           >선택 해제</button>
         </div>
         <p className="text-[10px] text-stone-500">체크박스·Ctrl/⌘: 다중 선택 · Shift: 범위 선택</p>
+        <button
+          type="button"
+          onClick={() => {
+            selectionAnchor.current = null;
+            onDeleteSelectedElements();
+          }}
+          disabled={deletableCount === 0}
+          className="w-full flex items-center justify-center gap-1.5 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-300 hover:bg-rose-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          title="선택한 객체를 한 번에 삭제합니다. 잠긴 객체와 잠긴 레이어의 객체는 유지됩니다. (Delete)"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          선택 객체 삭제{deletableCount > 0 ? ` (${deletableCount})` : ''}
+        </button>
       </div>
 
       {/* Layer Stack (Rendered in reverse order: top layer on top) */}

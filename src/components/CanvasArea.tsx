@@ -46,10 +46,17 @@ import {
 } from '../utils/autoCrop';
 import { Crop, Scissors, Copy, Wand2, Minus, Plus } from 'lucide-react';
 import { canEditElement, canEditLayer } from '../utils/lockGuards';
-import { clampManualZoom, computeViewportFit, shouldApplyFitNonce } from '../utils/viewportFit';
+import {
+  RULER_SIZE,
+  clampManualZoom,
+  computeViewportFit,
+  shouldApplyFitNonce,
+} from '../utils/viewportFit';
 import { shouldBlockDocumentShortcut } from '../utils/documentShortcuts';
 import { type LineStylePreset, resolveNewShapeStroke } from '../utils/stylePrefs';
 import { GRID_MAJOR_EVERY, clampGridSize, isDarkCanvasBackground } from '../utils/gridSettings';
+import { computeTableGridCells } from '../utils/tableGrid';
+import { computeImageFitRect, resolveImageAspect } from '../utils/imageFit';
 
 /** Default text tool: compact 12px label box */
 const DEFAULT_TEXT_FONT_SIZE = 12;
@@ -227,22 +234,31 @@ const RadialPreviewItem: React.FC<{ el: CanvasElement }> = ({ el }) => {
         </g>
       )}
 
-      {el.type === 'image' && (
-        <g transform={rot !== 0 ? `rotate(${rot} ${cx} ${cy})` : undefined}>
-          <image
-            href={el.src}
-            x={el.x}
-            y={el.y}
-            width={el.width}
-            height={el.height}
-            preserveAspectRatio="none"
-            opacity={el.opacity}
-            style={{
-              filter: `brightness(${el.filters.brightness}%) contrast(${el.filters.contrast}%) saturate(${el.filters.saturation}%) blur(${el.filters.blur}px) grayscale(${el.filters.grayscale}%) invert(${el.filters.invert}%)`,
-            }}
-          />
-        </g>
-      )}
+      {el.type === 'image' && (() => {
+        const aspect = resolveImageAspect(el);
+        const useFit = aspect.fit !== 'none';
+        const fitRect = computeImageFitRect(
+          { x: el.x, y: el.y, width: el.width, height: el.height },
+          { width: el.naturalWidth, height: el.naturalHeight },
+          aspect
+        );
+        return (
+          <g transform={rot !== 0 ? `rotate(${rot} ${cx} ${cy})` : undefined}>
+            <image
+              href={el.src}
+              x={useFit ? fitRect.x : el.x}
+              y={useFit ? fitRect.y : el.y}
+              width={useFit ? fitRect.width : el.width}
+              height={useFit ? fitRect.height : el.height}
+              preserveAspectRatio="none"
+              opacity={el.opacity}
+              style={{
+                filter: `brightness(${el.filters.brightness}%) contrast(${el.filters.contrast}%) saturate(${el.filters.saturation}%) blur(${el.filters.blur}px) grayscale(${el.filters.grayscale}%) invert(${el.filters.invert}%)`,
+              }}
+            />
+          </g>
+        );
+      })()}
     </g>
   );
 };
@@ -816,15 +832,23 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
 
   const lastFitNonceRef = useRef(0);
 
-  // Center canvas initially
+  // 캔버스를 에디트 영역의 좌상단 모서리에 맞춘다 (가운데 정렬 아님).
+  // 눈금자를 켜면 눈금자 폭만큼 안쪽으로 들어가 눈금자 아래에서 시작한다.
   useEffect(() => {
-    if (containerRef.current) {
-      const rect = containerRef.current.getBoundingClientRect();
-      const initialPanX = Math.max(20, (rect.width - config.width * zoom) / 2);
-      const initialPanY = Math.max(20, (rect.height - config.height * zoom) / 2);
-      setPan({ x: initialPanX, y: initialPanY });
-    }
+    const inset = config.showRulers ? RULER_SIZE : 0;
+    setPan({ x: inset, y: inset });
   }, []);
+
+  // 눈금자 표시가 바뀌면 기준점도 같이 이동한다 (좌상단 정렬 유지).
+  const prevInsetRef = useRef(config.showRulers ? RULER_SIZE : 0);
+  useEffect(() => {
+    const inset = config.showRulers ? RULER_SIZE : 0;
+    const prevInset = prevInsetRef.current;
+    if (inset === prevInset) return;
+    prevInsetRef.current = inset;
+    const delta = inset - prevInset;
+    setPan((prev) => ({ x: prev.x + delta, y: prev.y + delta }));
+  }, [config.showRulers]);
 
   useEffect(() => {
     if (!shouldApplyFitNonce(fitNonce, lastFitNonceRef.current)) return;
@@ -2661,6 +2685,35 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           );
         })()}
 
+        {/* 표(테이블) 격자 가이드 — 셀 좌표는 현재 캔버스 크기에 맞춰 계산된다 */}
+        {config.tableGrid && config.tableGrid.showGuides &&
+          (() => {
+            const cells = computeTableGridCells(config.width, config.height, config.tableGrid);
+            if (cells.length === 0) return null;
+            return (
+              <svg
+                id="table-grid-overlay"
+                className="absolute inset-0 w-full h-full pointer-events-none"
+                viewBox={`0 0 ${config.width} ${config.height}`}
+              >
+                {cells.map((cell) => (
+                  <rect
+                    key={`table-grid-cell-${cell.index}`}
+                    x={cell.x}
+                    y={cell.y}
+                    width={cell.width}
+                    height={cell.height}
+                    fill="none"
+                    stroke="#F59E0B"
+                    strokeWidth={1}
+                    strokeDasharray="6 4"
+                    opacity={0.75}
+                  />
+                ))}
+              </svg>
+            );
+          })()}
+
         {/* SVG Drawing & Elements Stage */}
         <svg
           className="absolute inset-0 w-full h-full overflow-visible"
@@ -2719,19 +2772,24 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                   );
                 }
               }
-              if (el.type === 'image' && el.cornerRadius) {
-                nodes.push(
-                  <clipPath key={`clip-${el.id}`} id={`clip-${el.id}`}>
-                    <rect
-                      x={el.x}
-                      y={el.y}
-                      width={el.width}
-                      height={el.height}
-                      rx={el.cornerRadius}
-                      ry={el.cornerRadius}
-                    />
-                  </clipPath>
-                );
+              if (el.type === 'image') {
+                // 모서리 둥글기 또는 cover/contain 맞춤이면 셀 영역으로 잘라낸다.
+                const aspect = resolveImageAspect(el);
+                const needsClip = !!el.cornerRadius || aspect.fit !== 'none';
+                if (needsClip) {
+                  nodes.push(
+                    <clipPath key={`clip-${el.id}`} id={`clip-${el.id}`}>
+                      <rect
+                        x={el.x}
+                        y={el.y}
+                        width={el.width}
+                        height={el.height}
+                        rx={el.cornerRadius || 0}
+                        ry={el.cornerRadius || 0}
+                      />
+                    </clipPath>
+                  );
+                }
               }
               return nodes;
             })}
@@ -2998,47 +3056,58 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
                       )}
 
                       {/* IMAGE ELEMENT (Supports ClipPath Corner Radius, Border, and Non-blocking pointer events) */}
-                      {el.type === 'image' && (
-                        <g
-                          transform={
-                            rot !== 0
-                              ? `rotate(${rot} ${el.x + el.width / 2} ${el.y + el.height / 2})`
-                              : undefined
-                          }
-                        >
-                          <image
-                            href={el.src}
-                            x={el.x}
-                            y={el.y}
-                            width={el.width}
-                            height={el.height}
-                            preserveAspectRatio="none"
-                            opacity={el.opacity}
-                            filter={filterAttr}
-                            clipPath={el.cornerRadius ? `url(#clip-${el.id})` : undefined}
-                            pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
-                            className={currentTool === 'select' ? 'cursor-pointer' : ''}
-                            style={{
-                              filter: `brightness(${el.filters.brightness}%) contrast(${el.filters.contrast}%) saturate(${el.filters.saturation}%) blur(${el.filters.blur}px) grayscale(${el.filters.grayscale}%) invert(${el.filters.invert}%)`,
-                            }}
-                          />
-                          {/* Optional Picture Border */}
-                          {el.borderWidth ? (
-                            <rect
-                              x={el.x}
-                              y={el.y}
-                              width={el.width}
-                              height={el.height}
-                              rx={el.cornerRadius || 0}
-                              ry={el.cornerRadius || 0}
-                              fill="none"
-                              stroke={el.borderColor || '#000000'}
-                              strokeWidth={el.borderWidth}
-                              pointerEvents="none"
+                      {el.type === 'image' && (() => {
+                        // cover/contain 은 비율을 유지한 채 박스 안에서 그림 크기를 다시 계산한다.
+                        const aspect = resolveImageAspect(el);
+                        const useFit = aspect.fit !== 'none';
+                        const fitRect = computeImageFitRect(
+                          { x: el.x, y: el.y, width: el.width, height: el.height },
+                          { width: el.naturalWidth, height: el.naturalHeight },
+                          aspect
+                        );
+                        const needsClip = !!el.cornerRadius || useFit;
+                        return (
+                          <g
+                            transform={
+                              rot !== 0
+                                ? `rotate(${rot} ${el.x + el.width / 2} ${el.y + el.height / 2})`
+                                : undefined
+                            }
+                          >
+                            <image
+                              href={el.src}
+                              x={useFit ? fitRect.x : el.x}
+                              y={useFit ? fitRect.y : el.y}
+                              width={useFit ? fitRect.width : el.width}
+                              height={useFit ? fitRect.height : el.height}
+                              preserveAspectRatio="none"
+                              opacity={el.opacity}
+                              filter={filterAttr}
+                              clipPath={needsClip ? `url(#clip-${el.id})` : undefined}
+                              pointerEvents={isSelectOrElementTool ? 'all' : 'none'}
+                              className={currentTool === 'select' ? 'cursor-pointer' : ''}
+                              style={{
+                                filter: `brightness(${el.filters.brightness}%) contrast(${el.filters.contrast}%) saturate(${el.filters.saturation}%) blur(${el.filters.blur}px) grayscale(${el.filters.grayscale}%) invert(${el.filters.invert}%)`,
+                              }}
                             />
-                          ) : null}
-                        </g>
-                      )}
+                            {/* Optional Picture Border */}
+                            {el.borderWidth ? (
+                              <rect
+                                x={el.x}
+                                y={el.y}
+                                width={el.width}
+                                height={el.height}
+                                rx={el.cornerRadius || 0}
+                                ry={el.cornerRadius || 0}
+                                fill="none"
+                                stroke={el.borderColor || '#000000'}
+                                strokeWidth={el.borderWidth}
+                                pointerEvents="none"
+                              />
+                            ) : null}
+                          </g>
+                        );
+                      })()}
 
                       {/* Multi-selection indicator highlight border if element is selected */}
                       {isSelected && selectedElementIds.length > 1 && (

@@ -12,6 +12,8 @@ import {
   RadialToolState,
   RadialStep,
   RadialRotateMode,
+  TableGridSpec,
+  ImageAspectFit,
 } from './types';
 import { HeaderNavbar } from './components/HeaderNavbar';
 import { Toolbar } from './components/Toolbar';
@@ -21,19 +23,12 @@ import { PropertiesPanel } from './components/PropertiesPanel';
 import { ExportModal } from './components/ExportModal';
 import { ShortcutsGuideModal } from './components/ShortcutsGuideModal';
 import { NewCanvasModal } from './components/NewCanvasModal';
+import { TableGridModal, type GridImageInput } from './components/TableGridModal';
 import { ClipboardGuideModal } from './components/ClipboardGuideModal';
 import { HistoryPanel } from './components/HistoryPanel';
 import { Layers, Sliders } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
-import {
-  AutosaveRecord,
-  clearAutosave,
-  formatSavedAt,
-  isAutosaveEnabled,
-  loadAutosave,
-  saveAutosave,
-  setAutosaveEnabled,
-} from './utils/autosave';
+import { clearLegacyAutosave } from './utils/autosave';
 import { exportRegionToRaster } from './utils/rasterExport';
 import { getContentBounds } from './utils/canvasFit';
 import {
@@ -93,6 +88,8 @@ import {
   shouldBlockDocumentPaste,
   shouldBlockDocumentShortcut,
 } from './utils/documentShortcuts';
+import { clampTableGridSpec, computeTableGridCells } from './utils/tableGrid';
+import { readImageFiles } from './utils/gridImageLoader';
 
 const INITIAL_CONFIG: CanvasConfig = {
   width: 1280,
@@ -144,9 +141,6 @@ function initialSnapshot() {
 }
 
 export default function App() {
-  // ErrorBoundary remounts restore from memory; only a fresh page load offers the autosave
-  const fromSessionRef = useRef<boolean | null>(null);
-  if (fromSessionRef.current === null) fromSessionRef.current = recallDocument() !== null;
   const recovered = useMemo(() => initialSnapshot(), []);
 
   // State
@@ -192,6 +186,7 @@ export default function App() {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isNewCanvasOpen, setIsNewCanvasOpen] = useState(false);
   const [isClipboardGuideOpen, setIsClipboardGuideOpen] = useState(false);
+  const [isTableGridOpen, setIsTableGridOpen] = useState(false);
 
   // Toast feedback message
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -720,90 +715,13 @@ export default function App() {
   );
 
   /* ---------------------------------------------------------------------- */
-  /* Autosave (IndexedDB)                                                   */
+  /* 레거시 자동 저장본 정리                                                 */
   /* ---------------------------------------------------------------------- */
-  const [autosaveOn, setAutosaveOn] = useState<boolean>(() => isAutosaveEnabled());
-  const [autosaveSavedAt, setAutosaveSavedAt] = useState<number | null>(null);
-  const [autosaveError, setAutosaveError] = useState<string | null>(null);
-  const [restoreOffer, setRestoreOffer] = useState<AutosaveRecord | null>(null);
-  // No saving until we know whether an older autosave should be offered first
-  const [autosaveReady, setAutosaveReady] = useState(false);
-
+  // 자동 저장·복구 기능은 제거되었다. 예전에 IndexedDB에 남아 있을 수 있는
+  // 과거 저장본만 한 번 지워 공간을 되돌리고, 복구 안내 창이 뜨지 않게 한다.
   useEffect(() => {
-    let cancelled = false;
-    if (fromSessionRef.current) {
-      setAutosaveReady(true);
-      return;
-    }
-    loadAutosave()
-      .then((rec) => {
-        if (cancelled) return;
-        if (rec && rec.elements?.length > 0) {
-          const result = validateProjectData({
-            version: rec.version,
-            config: rec.config,
-            layers: rec.layers,
-            elements: rec.elements,
-          });
-          if (result.ok) {
-            setRestoreOffer({ ...rec, ...result.data, savedAt: rec.savedAt, activeLayerId: rec.activeLayerId });
-          }
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setAutosaveError('이 브라우저에서는 자동 저장을 쓸 수 없습니다');
-      })
-      .finally(() => {
-        if (!cancelled) setAutosaveReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
+    void clearLegacyAutosave().catch(() => {});
   }, []);
-
-  const latestDocRef = useRef<HistorySnapshot>(recovered);
-  latestDocRef.current = { elements, layers, activeLayerId, canvasConfig: config };
-
-  useEffect(() => {
-    if (!autosaveOn || !autosaveReady || restoreOffer) return;
-    const t = setTimeout(() => {
-      saveAutosave(latestDocRef.current)
-        .then((ts) => {
-          setAutosaveSavedAt(ts);
-          setAutosaveError(null);
-        })
-        .catch(() => setAutosaveError('자동 저장 실패 (저장 공간 부족일 수 있음)'));
-    }, 1000);
-    return () => clearTimeout(t);
-  }, [elements, layers, config, activeLayerId, autosaveOn, autosaveReady, restoreOffer]);
-
-  // Best-effort flush when the tab goes away mid-debounce
-  useEffect(() => {
-    if (!autosaveOn || !autosaveReady || restoreOffer) return;
-    const flush = () => {
-      void saveAutosave(latestDocRef.current).catch(() => {});
-    };
-    window.addEventListener('pagehide', flush);
-    return () => window.removeEventListener('pagehide', flush);
-  }, [autosaveOn, autosaveReady, restoreOffer]);
-
-  const handleToggleAutosave = useCallback((enabled: boolean) => {
-    setAutosaveEnabled(enabled);
-    setAutosaveOn(enabled);
-  }, []);
-
-  const handleClearAutosave = useCallback(() => {
-    clearAutosave()
-      .then(() => {
-        setAutosaveSavedAt(null);
-        showToast(
-          autosaveOn
-            ? '자동 저장본을 지웠습니다. 다음 변경부터 다시 저장합니다.'
-            : '자동 저장본을 지웠습니다.'
-        );
-      })
-      .catch(() => showToast('자동 저장본을 지우지 못했습니다.'));
-  }, [autosaveOn, showToast]);
 
   // Selection handlers ??sync selected object's color/style for subsequent drawing
   const handleSelectElement = useCallback(
@@ -2108,6 +2026,135 @@ export default function App() {
     [handleInsertImageSrc]
   );
 
+  // ---------------------------------------------------------------------
+  // 표(테이블) 격자 — 생성/갱신 및 이미지 배치
+  // ---------------------------------------------------------------------
+  /** 이미지 요소용 고유 ID (같은 밀리초에 여러 장을 넣어도 충돌하지 않게 한다) */
+  const imageIdSeqRef = useRef(0);
+  const nextImageId = useCallback(() => {
+    imageIdSeqRef.current += 1;
+    return `image-${Date.now().toString(36)}-${imageIdSeqRef.current.toString(36)}`;
+  }, []);
+
+  /** 격자 설정 적용 — 셀 좌표는 캔버스 크기에서 다시 계산된다 */
+  const handleApplyTableGrid = useCallback(
+    (spec: TableGridSpec) => {
+      const normalized = clampTableGridSpec(spec);
+      handleUpdateConfig({ tableGrid: normalized });
+      showToast(
+        `${normalized.columns}열 × ${normalized.rows}행 격자를 적용했습니다 (칸 ${normalized.columns * normalized.rows}개).`
+      );
+    },
+    [handleUpdateConfig, showToast]
+  );
+
+  /** 격자 해제 — 가이드선만 사라지고 이미지는 그대로 남는다 */
+  const handleClearTableGrid = useCallback(() => {
+    handleUpdateConfig({ tableGrid: undefined });
+    showToast('격자를 해제했습니다.');
+  }, [handleUpdateConfig, showToast]);
+
+  /**
+   * 이미지를 격자 셀에 행 우선(좌상단 → 우하단) 순서로 배치한다.
+   * 이미지는 일반 레이어 객체로 추가되므로 레이어/실행취소와 함께 동작한다.
+   *
+   * specOverride를 주면 격자 설정을 함께 확장한 뒤 배치한다
+   * (칸이 부족할 때 "행 +n / 열 +n" 으로 늘린 경우 — 설정 변경과 배치를 한 번의 기록으로 남긴다).
+   */
+  const handlePlaceImagesInGrid = useCallback(
+    (images: GridImageInput[], fit: ImageAspectFit, specOverride?: TableGridSpec) => {
+      const spec = specOverride ? clampTableGridSpec(specOverride) : config.tableGrid;
+      if (!spec) {
+        showToast('먼저 격자를 생성하세요.');
+        return;
+      }
+      const targetLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0];
+      if (!targetLayer || !canEditLayer(targetLayer)) {
+        showToast('잠긴 레이어에는 이미지를 넣을 수 없습니다.');
+        return;
+      }
+      const cells = computeTableGridCells(config.width, config.height, spec);
+      if (cells.length === 0) {
+        showToast('배치할 칸이 없습니다.');
+        return;
+      }
+
+      const placeCount = Math.min(images.length, cells.length);
+      const layerId = targetLayer.id;
+      const newElements: ImageElement[] = images.slice(0, placeCount).map((item, index) => {
+        const cell = cells[index];
+        return {
+          id: nextImageId(),
+          layerId,
+          name: item.name.substring(0, 20),
+          type: 'image',
+          src: item.src,
+          naturalWidth: item.naturalWidth,
+          naturalHeight: item.naturalHeight,
+          x: cell.x,
+          y: cell.y,
+          width: cell.width,
+          height: cell.height,
+          rotation: 0,
+          opacity: 1,
+          filters: {
+            brightness: 100,
+            contrast: 100,
+            saturation: 100,
+            blur: 0,
+            grayscale: 0,
+            invert: 0,
+          },
+          // 비율 왜곡 없이 셀 안에 배치 (cover = 꽉 채우기, contain = 전체 보기)
+          aspectFit: fit === 'contain' ? 'contain' : 'cover',
+        };
+      });
+
+      const next = [...elementsRef.current, ...newElements];
+      elementsRef.current = next;
+      setElements(next);
+      // 격자 확장이 함께 요청되었으면 설정과 배치를 한 번의 히스토리 기록으로 남긴다.
+      const nextConfig: CanvasConfig = specOverride
+        ? { ...config, tableGrid: spec }
+        : config;
+      if (specOverride) setConfig(nextConfig);
+      pushHistory(next, layers, nextConfig);
+      setSelectedElementIds(newElements.map((el) => el.id));
+      setCurrentTool('select');
+
+      const overflow = images.length - placeCount;
+      showToast(
+        overflow > 0
+          ? `이미지 ${placeCount}개를 격자에 배치했습니다. 칸(${cells.length}개)을 초과한 ${overflow}장은 배치하지 않았습니다 — 가로/세로 칸 수를 늘리세요.`
+          : `이미지 ${placeCount}개를 격자에 배치했습니다.`
+      );
+    },
+    [activeLayerId, config, layers, nextImageId, pushHistory, showToast]
+  );
+
+  /** 여러 장을 한 번에 선택했을 때 — 격자가 있으면 격자에, 없으면 개별 삽입 */
+  const handleInsertImages = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      if (files.length === 1) {
+        handleInsertImage(files[0]);
+        return;
+      }
+      const loaded = await readImageFiles(files);
+      if (loaded.length === 0) {
+        showToast('이미지 파일을 읽지 못했습니다.');
+        return;
+      }
+      if (config.tableGrid) {
+        handlePlaceImagesInGrid(loaded, 'cover');
+        return;
+      }
+      loaded.forEach((item) => handleInsertImageSrc(item.src, item.name));
+      showToast(`이미지 ${loaded.length}장을 삽입했습니다.`);
+    },
+    [config.tableGrid, handleInsertImage, handleInsertImageSrc, handlePlaceImagesInGrid, showToast]
+  );
+
   // Paste only from the app's internal clipboard (cut/copy inside the app).
   // Returns true if something was pasted.
   const pasteFromInternalClipboard = useCallback((): boolean => {
@@ -2377,41 +2424,6 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  // Restore the autosaved document offered on startup
-  const handleRestoreAutosave = useCallback(() => {
-    const rec = restoreOffer;
-    if (!rec) return;
-    const nextActive = rec.layers.some((l) => l.id === rec.activeLayerId)
-      ? rec.activeLayerId
-      : rec.layers[0].id;
-    setConfig(rec.config);
-    setLayers(rec.layers);
-    setActiveLayerId(nextActive);
-    setElements(rec.elements);
-    elementsRef.current = rec.elements;
-    setSelectedElementIds([]);
-    setPathEditId(null);
-    setCroppingImageId(null);
-    setActiveImgCropBox(null);
-    activeImgCropBoxRef.current = null;
-    resetHistorySnapshot({
-      elements: rec.elements,
-      layers: rec.layers,
-      activeLayerId: nextActive,
-      canvasConfig: rec.config,
-    });
-    setRestoreOffer(null);
-    setAutosaveSavedAt(rec.savedAt);
-    setZoom(0.7);
-    setZoomFitActive(false);
-    showToast('자동 저장된 작업을 복구했습니다.');
-  }, [restoreOffer, resetHistorySnapshot, showToast]);
-
-  const handleDiscardAutosave = useCallback(() => {
-    setRestoreOffer(null);
-    showToast('이전 자동 저장본을 버렸습니다. 지금 문서를 자동 저장합니다.');
-  }, [showToast]);
-
   const handlePrimaryColorChange = useCallback(
     (color: string, transient = false) => {
       setPrimaryColor(color);
@@ -2577,7 +2589,7 @@ export default function App() {
   }, []);
 
   const isAnyModalOpen =
-    isExportOpen || isShortcutsOpen || isNewCanvasOpen || isClipboardGuideOpen;
+    isExportOpen || isShortcutsOpen || isNewCanvasOpen || isClipboardGuideOpen || isTableGridOpen;
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -2884,6 +2896,8 @@ export default function App() {
         onSaveProject={handleSaveProject}
         onLoadProject={handleLoadProject}
         onInsertImage={handleInsertImage}
+        onInsertImages={handleInsertImages}
+        onOpenTableGrid={() => setIsTableGridOpen(true)}
         onPasteFromClipboard={handlePasteAction}
         onFitCanvasToContent={handleFitCanvasToContent}
         canFitCanvas={canFitCanvas}
@@ -2944,11 +2958,6 @@ export default function App() {
               snapshots={documentHistory.snapshots}
               index={documentHistory.index}
               onJump={handleJumpHistory}
-              autosaveEnabled={autosaveOn}
-              autosaveSavedAt={autosaveSavedAt}
-              autosaveError={autosaveError}
-              onToggleAutosave={handleToggleAutosave}
-              onClearAutosave={handleClearAutosave}
             />
           }
         />
@@ -3148,37 +3157,16 @@ export default function App() {
         onInsertImageSrc={handleInsertImageSrc}
       />
 
-      {/* Autosave restore offer */}
-      {restoreOffer && (
-        <div
-          role="alertdialog"
-          aria-label="자동 저장본 복구"
-          className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-stone-900/95 text-stone-100 border border-amber-500/60 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 text-xs backdrop-blur-md"
-        >
-          <span>
-            자동 저장된 이전 작업이 있습니다{' '}
-            <span className="text-stone-400">
-              ({formatSavedAt(restoreOffer.savedAt)} · 객체 {restoreOffer.elements.length}개 ·{' '}
-              {restoreOffer.config.width}×{restoreOffer.config.height})
-            </span>
-            . 복구할까요? <span className="text-stone-500">결정하기 전에는 자동 저장을 잠시 멈춥니다.</span>
-          </span>
-          <button
-            type="button"
-            onClick={handleRestoreAutosave}
-            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold rounded transition-colors"
-          >
-            복구
-          </button>
-          <button
-            type="button"
-            onClick={handleDiscardAutosave}
-            className="px-3 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded transition-colors"
-          >
-            버리기
-          </button>
-        </div>
-      )}
+      <TableGridModal
+        isOpen={isTableGridOpen}
+        onClose={() => setIsTableGridOpen(false)}
+        config={config}
+        grid={config.tableGrid ?? null}
+        onApplyGrid={handleApplyTableGrid}
+        onClearGrid={handleClearTableGrid}
+        onPlaceImages={handlePlaceImagesInGrid}
+        isTargetLayerLocked={!canEditLayer(layers.find((l) => l.id === activeLayerId) ?? layers[0])}
+      />
 
       {/* Floating Toast Notification */}
       {toastMessage && (

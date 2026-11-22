@@ -10,6 +10,7 @@ import {
   ArrowType,
   ArrowSize,
   LineCap,
+  ImageAspectFit,
 } from '../types';
 import { FONT_FAMILIES } from '../utils/colorUtils';
 import { finalizeArcGeometry } from '../utils/shapeGenerators';
@@ -1933,6 +1934,111 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 <span className="text-xs font-mono text-stone-400 w-8 text-right">{img.borderWidth || 0}px</span>
               </div>
             </div>
+          </div>
+
+          {/* 2-1. 이미지 맞춤 (cover / contain) — 비율 왜곡 없이 배치 */}
+          <div className="space-y-3 pt-1">
+            <label className="text-stone-300 font-medium block text-xs">이미지 맞춤 (셀 안에서)</label>
+            <div className="flex items-center space-x-1">
+              {(
+                [
+                  { value: 'none', label: '늘이기' },
+                  { value: 'cover', label: '꽉 채우기' },
+                  { value: 'contain', label: '전체 보기' },
+                ] as { value: ImageAspectFit; label: string }[]
+              ).map((opt) => {
+                const active = (img.aspectFit ?? 'none') === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    id={`btn-image-fit-${opt.value}`}
+                    onClick={() =>
+                      onUpdateElement({
+                        ...img,
+                        aspectFit: opt.value,
+                        aspectZoom: opt.value === 'none' ? undefined : img.aspectZoom ?? 1,
+                      })
+                    }
+                    className={`flex-1 py-1 rounded border text-[10px] ${
+                      active
+                        ? 'border-amber-500 text-amber-300 bg-amber-500/10'
+                        : 'border-stone-800 text-stone-400 hover:text-stone-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {(img.aspectFit ?? 'none') !== 'none' && (
+              <>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-stone-400">확대 (Zoom)</span>
+                    <span className="font-mono text-stone-300">
+                      {(img.aspectZoom ?? 1).toFixed(2)}×
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="4"
+                    step="0.05"
+                    value={img.aspectZoom ?? 1}
+                    onChange={(e) =>
+                      onUpdateElement({ ...img, aspectZoom: parseFloat(e.target.value) || 1 })
+                    }
+                    className="w-full accent-amber-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-stone-400">초점 가로</span>
+                    <span className="font-mono text-stone-300">
+                      {Math.round((img.aspectFocusX ?? 0.5) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={img.aspectFocusX ?? 0.5}
+                    onChange={(e) =>
+                      onUpdateElement({ ...img, aspectFocusX: parseFloat(e.target.value) })
+                    }
+                    className="w-full accent-amber-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-stone-400">초점 세로</span>
+                    <span className="font-mono text-stone-300">
+                      {Math.round((img.aspectFocusY ?? 0.5) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={img.aspectFocusY ?? 0.5}
+                    onChange={(e) =>
+                      onUpdateElement({ ...img, aspectFocusY: parseFloat(e.target.value) })
+                    }
+                    className="w-full accent-amber-500"
+                  />
+                </div>
+                <p className="text-[10px] text-stone-500 leading-snug">
+                  꽉 채우기 = 비율 유지 후 중앙 기준 잘림 / 전체 보기 = 비율 유지 후 여백 /
+                  늘이기 = 기존 동작(비율 왜곡 가능)
+                </p>
+              </>
+            )}
           </div>
 
           {/* 3. Image Correction & Filters */}

@@ -5,7 +5,13 @@ import {
   ImageFilters,
   Layer,
   ShapeType,
+  TableGridSpec,
 } from '../types';
+import {
+  TABLE_GRID_GAP_MAX,
+  TABLE_GRID_MAX_COLUMNS,
+  TABLE_GRID_MAX_ROWS,
+} from './tableGrid';
 
 const ELEMENT_TYPES: ElementType[] = ['shape', 'brush', 'text', 'image'];
 
@@ -77,8 +83,38 @@ function isSupportedVersion(version: unknown): version is string {
   return /^1(\.\d+){0,2}$/.test(version);
 }
 
-function validateConfig(raw: unknown, errors: string[]): CanvasConfig | null {
+/** 선택적 표(테이블) 격자 설정 검증 — 없으면 null */
+function validateTableGrid(raw: unknown, errors: string[]): TableGridSpec | null {
+  if (raw === undefined || raw === null) return null;
   if (!isObj(raw)) {
+    errors.push('config.tableGrid가 객체가 아닙니다.');
+    return null;
+  }
+  if (!isFiniteNumber(raw.columns) || !inRange(raw.columns, 1, TABLE_GRID_MAX_COLUMNS)) {
+    errors.push('config.tableGrid.columns가 유효하지 않습니다.');
+    return null;
+  }
+  if (!isFiniteNumber(raw.rows) || !inRange(raw.rows, 1, TABLE_GRID_MAX_ROWS)) {
+    errors.push('config.tableGrid.rows가 유효하지 않습니다.');
+    return null;
+  }
+  if (!isFiniteNumber(raw.gap) || !inRange(raw.gap, 0, TABLE_GRID_GAP_MAX)) {
+    errors.push('config.tableGrid.gap가 유효하지 않습니다.');
+    return null;
+  }
+  if (typeof raw.showGuides !== 'boolean') {
+    errors.push('config.tableGrid.showGuides가 boolean이 아닙니다.');
+    return null;
+  }
+  return {
+    columns: Math.round(raw.columns as number),
+    rows: Math.round(raw.rows as number),
+    gap: Math.round(raw.gap as number),
+    showGuides: raw.showGuides,
+  };
+}
+
+function validateConfig(raw: unknown, errors: string[]): CanvasConfig | null {  if (!isObj(raw)) {
     errors.push('config가 객체가 아닙니다.');
     return null;
   }
@@ -103,6 +139,7 @@ function validateConfig(raw: unknown, errors: string[]): CanvasConfig | null {
   if (!isFiniteNumber(raw.gridSize) || !inRange(raw.gridSize, 1, 1000)) {
     errors.push('config.gridSize가 유효하지 않습니다.');
   }
+  const tableGrid = validateTableGrid(raw.tableGrid, errors);
   if (errors.length > 0) return null;
   return {
     width: raw.width as number,
@@ -112,6 +149,7 @@ function validateConfig(raw: unknown, errors: string[]): CanvasConfig | null {
     showRulers: raw.showRulers as boolean,
     snapToGrid: raw.snapToGrid as boolean,
     gridSize: raw.gridSize as number,
+    ...(tableGrid ? { tableGrid } : {}),
   };
 }
 
@@ -399,6 +437,29 @@ function validateElement(
     }
     if (raw.borderColor !== undefined && typeof raw.borderColor !== 'string') {
       errors.push(`${label}.borderColor가 문자열이 아닙니다.`);
+    }
+    if (
+      raw.aspectFit !== undefined &&
+      raw.aspectFit !== 'none' &&
+      raw.aspectFit !== 'cover' &&
+      raw.aspectFit !== 'contain'
+    ) {
+      errors.push(`${label}.aspectFit가 유효하지 않습니다.`);
+    }
+    if (raw.aspectZoom !== undefined && (!isFiniteNumber(raw.aspectZoom) || raw.aspectZoom <= 0)) {
+      errors.push(`${label}.aspectZoom가 유효하지 않습니다.`);
+    }
+    if (
+      raw.aspectFocusX !== undefined &&
+      (!isFiniteNumber(raw.aspectFocusX) || !inRange(raw.aspectFocusX, 0, 1))
+    ) {
+      errors.push(`${label}.aspectFocusX가 유효하지 않습니다.`);
+    }
+    if (
+      raw.aspectFocusY !== undefined &&
+      (!isFiniteNumber(raw.aspectFocusY) || !inRange(raw.aspectFocusY, 0, 1))
+    ) {
+      errors.push(`${label}.aspectFocusY가 유효하지 않습니다.`);
     }
   }
 

@@ -146,6 +146,24 @@ export interface TextElement extends BaseElement {
   backgroundColor?: string;
 }
 
+/**
+ * 표(테이블) 격자 설정 — 캔버스를 규격 수의 칸으로 균등 분할한다.
+ * 셀 좌표는 캔버스 크기에 따라 계산되므로 캔버스를 바꾸면 자동 갱신된다.
+ */
+export interface TableGridSpec {
+  /** 가로 칸 수 (열) */
+  columns: number;
+  /** 세로 칸 수 (행) */
+  rows: number;
+  /** 칸 사이 여백 (px) */
+  gap: number;
+  /** 칸 경계 가이드선 표시 여부 */
+  showGuides: boolean;
+}
+
+/** 이미지 맞춤 방식 — 'none'은 기존 늘이기(stretch) 동작 */
+export type ImageAspectFit = 'none' | 'cover' | 'contain';
+
 export interface ImageFilters {
   brightness: number; // 0 to 200, 100 is normal
   contrast: number; // 0 to 200, 100 is normal
@@ -166,6 +184,19 @@ export interface ImageElement extends BaseElement {
   cornerRadius?: number;
   borderWidth?: number;
   borderColor?: string;
+  /**
+   * 이미지 맞춤 방식.
+   * 'none'(기본): 셀/박스를 그대로 늘려 distorted될 수 있음(기존 동작).
+   * 'cover': 비율을 유지한 채 빈틈 없이 채움(중앙 기준, 잘림 발생).
+   * 'contain': 비율을 유지한 채 전체가 보이도록 맞춤(여백 발생).
+   */
+  aspectFit?: ImageAspectFit;
+  /** 맞춤 모드에서 확대 비율 (1 = 기본) */
+  aspectZoom?: number;
+  /** 맞춤 모드에서 초점 X (0 = 좌측, 0.5 = 중앙, 1 = 우측) */
+  aspectFocusX?: number;
+  /** 맞춤 모드에서 초점 Y (0 = 상단, 0.5 = 중앙, 1 = 하단) */
+  aspectFocusY?: number;
 }
 
 export type CanvasElement =
@@ -205,6 +236,8 @@ export interface CanvasConfig {
   showRulers: boolean;
   snapToGrid: boolean;
   gridSize: number;
+  /** 표(테이블) 격자 설정 — 없으면 격자 기능이 꺼져 있음 */
+  tableGrid?: TableGridSpec;
 }
 
 export interface HistorySnapshot {

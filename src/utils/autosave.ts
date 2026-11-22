@@ -1,23 +1,14 @@
-import { CanvasConfig, CanvasElement, HistorySnapshot, Layer } from '../types';
-
 /**
- * Browser-local autosave in IndexedDB (images are base64 and outgrow
- * localStorage quickly). One slot: the latest document state.
+ * 레거시 자동 저장본 정리용 유틸.
+ *
+ * 자동 저장·복구 기능은 제거되었다(복구 안내 창도 더 이상 뜨지 않는다).
+ * 예전에 IndexedDB에 남아 있을 수 있는 과거 저장본만 한 번 지우기 위해
+ * 이 파일을 남겨 둔다.
  */
 
 const DB_NAME = 'imgman';
 const STORE = 'autosave';
 const KEY = 'current';
-const ENABLED_KEY = 'imgman.autosave.enabled';
-
-export interface AutosaveRecord {
-  version: string;
-  savedAt: number;
-  config: CanvasConfig;
-  layers: Layer[];
-  elements: CanvasElement[];
-  activeLayerId: string;
-}
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -34,67 +25,18 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+/** 과거에 저장된 자동 저장본을 삭제한다 (실패해도 앱 동작에는 영향 없음). */
+export async function clearLegacyAutosave(): Promise<void> {
   const db = await openDb();
   try {
-    return await new Promise<T>((resolve, reject) => {
-      const tx = db.transaction(STORE, mode);
-      const req = run(tx.objectStore(STORE));
-      tx.oncomplete = () => resolve(req.result);
-      tx.onerror = () => reject(tx.error ?? req.error ?? new Error('IndexedDB transaction failed'));
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
       tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
     });
   } finally {
     db.close();
   }
-}
-
-export async function saveAutosave(snapshot: HistorySnapshot): Promise<number> {
-  const savedAt = Date.now();
-  const record: AutosaveRecord = {
-    version: '1.0.0',
-    savedAt,
-    config: snapshot.canvasConfig,
-    layers: snapshot.layers,
-    elements: snapshot.elements,
-    activeLayerId: snapshot.activeLayerId,
-  };
-  await withStore('readwrite', (store) => store.put(record, KEY));
-  return savedAt;
-}
-
-export async function loadAutosave(): Promise<AutosaveRecord | null> {
-  const rec = await withStore<unknown>('readonly', (store) => store.get(KEY));
-  if (!rec || typeof rec !== 'object') return null;
-  return rec as AutosaveRecord;
-}
-
-export async function clearAutosave(): Promise<void> {
-  await withStore('readwrite', (store) => store.delete(KEY));
-}
-
-export function isAutosaveEnabled(): boolean {
-  try {
-    return localStorage.getItem(ENABLED_KEY) !== 'off';
-  } catch {
-    return true;
-  }
-}
-
-export function setAutosaveEnabled(enabled: boolean): void {
-  try {
-    localStorage.setItem(ENABLED_KEY, enabled ? 'on' : 'off');
-  } catch {
-    // Preference is a convenience only
-  }
-}
-
-export function formatSavedAt(ts: number, now = Date.now()): string {
-  const diff = Math.max(0, now - ts);
-  if (diff < 10_000) return '방금 전';
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}초 전`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}분 전`;
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getMonth() + 1}월 ${d.getDate()}일 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

@@ -19,6 +19,7 @@ import {
 import { getExportVisibleImageElements } from './svgExportImages';
 import { sanitizeSvgXmlId } from './vectorizedImageMarkup';
 import { serializeSafeSvgColor } from './safeSvgColor';
+import { computeImageFitRect, resolveImageAspect } from './imageFit';
 
 /** Douglas-Peucker 알고리즘으로 포인트 단순화 (허용 오차 px) */
 export function simplifyPoints(points: { x: number; y: number }[], tolerance = 1.5): { x: number; y: number }[] {
@@ -250,16 +251,21 @@ function collectImageClipDefs(
   fmt: (n: number) => string
 ): void {
   elements.forEach((el) => {
-    if (el.type !== 'image' || !el.cornerRadius || el.cornerRadius <= 0) return;
+    if (el.type !== 'image') return;
+    const aspect = resolveImageAspect(el);
+    const hasRadius = !!el.cornerRadius && el.cornerRadius > 0;
+    // 모서리 둥글기 또는 cover/contain 맞춤이면 박스 영역으로 잘라야 한다.
+    if (!hasRadius && aspect.fit === 'none') return;
     const safeId = sanitizeSvgXmlId(el.id);
     const key = `clip-img:${safeId}`;
     if (defsMap.has(key)) return;
-    const r = fmt(el.cornerRadius);
+    const r = hasRadius ? fmt(el.cornerRadius) : undefined;
+    const rxAttr = r ? ` rx="${r}" ry="${r}"` : '';
     defsMap.set(
       key,
       `
   <clipPath id="clip-img-${safeId}">
-    <rect x="0" y="0" width="${fmt(el.width)}" height="${fmt(el.height)}" rx="${r}" ry="${r}" />
+    <rect x="0" y="0" width="${fmt(el.width)}" height="${fmt(el.height)}"${rxAttr} />
   </clipPath>`
     );
   });
@@ -564,20 +570,33 @@ function assembleSvgString(
             : '';
 
           const safeId = sanitizeSvgXmlId(imgEl.id);
-          const clipAttr =
-            imgEl.cornerRadius && imgEl.cornerRadius > 0
-              ? ` clip-path="url(#clip-img-${safeId})"`
-              : '';
+          const aspect = resolveImageAspect(imgEl);
+          const useFit = aspect.fit !== 'none';
+          // cover/contain 은 비율을 유지한 채 그림 크기를 다시 계산한다 (캔버스와 동일).
+          const fitRect = useFit
+            ? computeImageFitRect(
+                { x: el.x, y: el.y, width: el.width, height: el.height },
+                { width: imgEl.naturalWidth, height: imgEl.naturalHeight },
+                aspect
+              )
+            : null;
+          const needsClip =
+            (imgEl.cornerRadius && imgEl.cornerRadius > 0) || useFit;
+          const clipAttr = needsClip ? ` clip-path="url(#clip-img-${safeId})"` : '';
           const opacityAttrImg = el.opacity !== 1 ? ` opacity="${fmt(el.opacity)}"` : '';
           const outerRot =
             rot !== 0 ? ` transform="${flipAttr}rotate(${fmt(rot)} ${fmt(cx)} ${fmt(cy)})"` : flipAttr
               ? ` transform="${flipAttr.trim()}"`
               : '';
+          const imgX = fitRect ? fmt(fitRect.x - el.x) : '0';
+          const imgY = fitRect ? fmt(fitRect.y - el.y) : '0';
+          const imgW = fitRect ? fmt(fitRect.width) : fmt(el.width);
+          const imgH = fitRect ? fmt(fitRect.height) : fmt(el.height);
 
           parts.push(`<g${outerRot}>`);
           parts.push(`<g transform="translate(${fmt(el.x)} ${fmt(el.y)})"${clipAttr}${opacityAttrImg}>`);
           parts.push(
-            `<image href="${encodeXML(finalHref)}" x="0" y="0" width="${fmt(el.width)}" height="${fmt(el.height)}" preserveAspectRatio="none"${filterStyle ? ` style="${filterStyle}"` : ''}${filterAttr} />`
+            `<image href="${encodeXML(finalHref)}" x="${imgX}" y="${imgY}" width="${imgW}" height="${imgH}" preserveAspectRatio="none"${filterStyle ? ` style="${filterStyle}"` : ''}${filterAttr} />`
           );
           if (imgEl.borderWidth && imgEl.borderWidth > 0) {
             const rx = imgEl.cornerRadius ? fmt(imgEl.cornerRadius) : '0';

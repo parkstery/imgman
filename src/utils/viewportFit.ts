@@ -73,6 +73,9 @@ function canvasFitsInViewport(
 /**
  * Zoom + pan so the whole canvas sits in the available viewport, inset for
  * rulers and padding. Fit zoom is allowed below the manual 25% floor.
+ *
+ * 캔버스는 에디트 영역의 **좌상단 모서리**에 맞춰 배치한다(가운데 정렬 아님).
+ * 눈금자를 켜면 눈금자 폭만큼 안쪽으로 들어가 눈금자 아래에 놓인다.
  */
 export function computeViewportFit(input: ViewportFitInput): ViewportFitResult {
   const minZoom = input.minZoom ?? FIT_MIN_ZOOM;
@@ -92,12 +95,10 @@ export function computeViewportFit(input: ViewportFitInput): ViewportFitResult {
     maxZoom
   );
 
-  const panFor = (z: number) => ({
-    x: inset + (viewportWidth - inset - canvasWidth * z) / 2,
-    y: inset + (viewportHeight - inset - canvasHeight * z) / 2,
-  });
+  // 좌상단 정렬: 눈금자 영역 바로 아래/오른쪽에서 시작한다.
+  const panFor = () => ({ x: inset, y: inset });
 
-  let pan = panFor(zoom);
+  let pan = panFor();
   if (
     !canvasFitsInViewport(
       pan,
@@ -116,7 +117,7 @@ export function computeViewportFit(input: ViewportFitInput): ViewportFitResult {
       minZoom,
       maxZoom
     );
-    pan = panFor(zoom);
+    pan = panFor();
   }
 
   return { zoom, pan };

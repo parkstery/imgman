@@ -13,6 +13,7 @@
     "verify:pen": "tsx scripts/verify-pen-lasso-history.ts",
     "verify:color": "tsx scripts/verify-color-picker.ts",
     "verify:image-fit": "tsx scripts/verify-image-fit.ts",
+    "verify:grid": "tsx scripts/verify-table-grid.ts",
     "verify:bg": "node scripts/run-node-esm.mjs scripts/verify-background-removal.ts",
     "verify:multi": "node scripts/run-node-esm.mjs scripts/verify-multi-style.ts",
     "verify:style": "node scripts/run-node-esm.mjs scripts/verify-style-prefs.ts"

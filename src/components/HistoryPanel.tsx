@@ -1,29 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CloudOff, Save, Trash2 } from 'lucide-react';
 import { HistorySnapshot } from '../types';
 import { describeHistoryStep } from '../utils/historyLabels';
-import { formatSavedAt } from '../utils/autosave';
 
 interface HistoryPanelProps {
   snapshots: HistorySnapshot[];
   index: number;
   onJump: (index: number) => void;
-  autosaveEnabled: boolean;
-  autosaveSavedAt: number | null;
-  autosaveError: string | null;
-  onToggleAutosave: (enabled: boolean) => void;
-  onClearAutosave: () => void;
 }
 
 export const HistoryPanel: React.FC<HistoryPanelProps> = ({
   snapshots,
   index,
   onJump,
-  autosaveEnabled,
-  autosaveSavedAt,
-  autosaveError,
-  onToggleAutosave,
-  onClearAutosave,
 }) => {
   const labels = useMemo(
     () =>
@@ -75,41 +63,6 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
           );
         })}
       </ol>
-
-      <div className="p-3 border-t border-stone-800 space-y-1.5 bg-stone-900/90 shrink-0">
-        <label className="flex items-center justify-between text-[11px] text-stone-300">
-          <span className="flex items-center gap-1.5">
-            {autosaveEnabled ? <Save className="w-3.5 h-3.5 text-emerald-400" /> : <CloudOff className="w-3.5 h-3.5 text-stone-500" />}
-            브라우저 자동 저장
-          </span>
-          <input
-            type="checkbox"
-            checked={autosaveEnabled}
-            onChange={(e) => onToggleAutosave(e.target.checked)}
-            className="accent-amber-500"
-          />
-        </label>
-        <div className="flex items-center justify-between text-[10px] text-stone-500">
-          <span>
-            {autosaveError
-              ? <span className="text-rose-400">{autosaveError}</span>
-              : !autosaveEnabled
-                ? '꺼짐 — 탭을 닫으면 작업이 사라집니다'
-                : autosaveSavedAt
-                  ? `마지막 저장: ${formatSavedAt(autosaveSavedAt)}`
-                  : '변경하면 자동으로 저장합니다'}
-          </span>
-          <button
-            type="button"
-            onClick={onClearAutosave}
-            className="p-1 rounded hover:bg-stone-800 text-stone-500 hover:text-rose-300 transition-colors"
-            title="브라우저에 저장된 자동 저장본 삭제"
-            aria-label="자동 저장본 삭제"
-          >
-            <Trash2 className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
     </div>
   );
 };

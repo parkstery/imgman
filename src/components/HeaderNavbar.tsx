@@ -17,6 +17,7 @@ import {
   Keyboard,
   Magnet,
   ClipboardPaste,
+  Table2,
 } from 'lucide-react';
 import { CanvasConfig } from '../types';
 import { clampManualZoom } from '../utils/viewportFit';
@@ -41,6 +42,9 @@ interface HeaderNavbarProps {
   onSaveProject: () => void;
   onLoadProject: (file: File) => void;
   onInsertImage: (file: File) => void;
+  /** 여러 장을 한 번에 선택했을 때 (격자가 있으면 격자에 배치) */
+  onInsertImages?: (files: File[]) => void;
+  onOpenTableGrid?: () => void;
   onPasteFromClipboard?: () => void;
   onFitCanvasToContent?: () => void;
   canFitCanvas?: boolean;
@@ -65,6 +69,8 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
   onSaveProject,
   onLoadProject,
   onInsertImage,
+  onInsertImages,
+  onOpenTableGrid,
   onPasteFromClipboard,
   onFitCanvasToContent,
   canFitCanvas = false,
@@ -82,11 +88,15 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
   };
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onInsertImage(file);
-      e.target.value = '';
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    if (files.length > 1 && onInsertImages) {
+      onInsertImages(files);
+      return;
     }
+    const file = files[0];
+    if (file) onInsertImage(file);
   };
 
   return (
@@ -103,6 +113,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
         ref={imageInputRef}
         type="file"
         accept="image/*"
+        multiple
         className="hidden"
         onChange={handleImageFileChange}
       />
@@ -154,7 +165,7 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
           id="btn-insert-image"
           onClick={() => imageInputRef.current?.click()}
           className="p-2 rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-stone-800 transition-colors"
-          title="이미지 삽입 (.png, .jpg 등)"
+          title="이미지 삽입 (.png, .jpg 등) — 여러 장 선택 시 격자에 순서대로 배치"
           aria-label="이미지 삽입"
         >
           <ImageIcon className="w-5 h-5" />
@@ -221,8 +232,17 @@ export const HeaderNavbar: React.FC<HeaderNavbarProps> = ({
           </button>
         </div>
 
-        {/* View toggles: Grid, Ruler, Snap */}
+        {/* View toggles: Table Grid, Grid, Ruler, Snap */}
         <div className="flex items-center space-x-1 px-2 border-r border-stone-800 shrink-0">
+          <button
+            id="btn-open-table-grid"
+            onClick={onOpenTableGrid}
+            className="p-1.5 rounded transition-colors text-amber-400 hover:text-amber-300 hover:bg-stone-800"
+            title="격자(테이블) 이미지 배치"
+            aria-label="격자 이미지 배치"
+          >
+            <Table2 className="w-4 h-4" />
+          </button>
           <button
             id="btn-toggle-ruler"
             onClick={() => onUpdateConfig({ showRulers: !config.showRulers })}
